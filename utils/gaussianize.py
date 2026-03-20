@@ -4,18 +4,21 @@ import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Text, List, Union
-from scipy import stats,special, optimize
+from scipy import stats, special, optimize
 from scipy.stats import kurtosis, norm, rankdata, boxcox
 
-np.seterr(all='warn')
+np.seterr(all="warn")
 _EPS = 1e-6
+
 
 def _update_x(x: Union[np.ndarray, List]) -> np.ndarray:
     x = np.asarray(x)
     if len(x.shape) == 1:
         x = x[:, np.newaxis]
     elif len(x.shape) != 2:
-        raise ValueError("Data should be a 1-d list of samples to transform or a 2d array with samples as rows.")
+        raise ValueError(
+            "Data should be a 1-d list of samples to transform or a 2d array with samples as rows."
+        )
     return x
 
 
@@ -31,7 +34,7 @@ class Gaussianize(sklearn.base.TransformerMixin):
 
     Parameters
     ----------
-    
+
     strategy : str, default='lambert'. Possibilities are 'lambert'[1], 'brute'[2] and 'boxcox'[3].
 
     tol : float, default = 1e-4
@@ -55,16 +58,19 @@ class Gaussianize(sklearn.base.TransformerMixin):
     [3] Box cox transformation and references: https://en.wikipedia.org/wiki/Power_transform
     """
 
-    def __init__(self, strategy: Text = 'lambert', 
-                 tol: float = 1e-5, 
-                 max_iter: int = 150, 
-                 verbose: bool = False):
+    def __init__(
+        self,
+        strategy: Text = "lambert",
+        tol: float = 1e-5,
+        max_iter: int = 150,
+        verbose: bool = False,
+    ):
         self.tol = tol
         self.max_iter = max_iter
         self.strategy = strategy
         self.coefs_ = []  # Store tau for each transformed variable
         self.verbose = verbose
-        
+
     def fit(self, x: np.ndarray, y=None):
         """Fit a Gaussianizing transformation to each variable/column in x."""
         # Initialize coefficients again with an empty list.  Otherwise
@@ -73,11 +79,13 @@ class Gaussianize(sklearn.base.TransformerMixin):
         x = _update_x(x)
         if self.verbose:
             print("Gaussianizing with strategy='%s'" % self.strategy)
-        
+
         if self.strategy == "lambert":
             _get_coef = lambda vec: igmm(vec, self.tol, max_iter=self.max_iter)
         elif self.strategy == "brute":
-            _get_coef = lambda vec: None   # TODO: In principle, we could store parameters to do a quasi-invert
+            _get_coef = (
+                lambda vec: None
+            )  # TODO: In principle, we could store parameters to do a quasi-invert
         elif self.strategy == "boxcox":
             _get_coef = lambda vec: boxcox(vec)[1]
         else:
@@ -92,37 +100,54 @@ class Gaussianize(sklearn.base.TransformerMixin):
         """Transform new data using a previously learned Gaussianization model."""
         x = _update_x(x)
         if x.shape[1] != len(self.coefs_):
-            raise ValueError("%d variables in test data, but %d variables were in training data." % (x.shape[1], len(self.coefs_)))
+            raise ValueError(
+                "%d variables in test data, but %d variables were in training data."
+                % (x.shape[1], len(self.coefs_))
+            )
 
-        if self.strategy == 'lambert':
+        if self.strategy == "lambert":
             return np.array([w_t(x_i, tau_i) for x_i, tau_i in zip(x.T, self.coefs_)]).T
-        elif self.strategy == 'brute':
-            return np.array([norm.ppf((rankdata(x_i) - 0.5) / len(x_i)) for x_i in x.T]).T
-        elif self.strategy == 'boxcox':
-            return np.array([boxcox(x_i, lmbda=lmbda_i) for x_i, lmbda_i in zip(x.T, self.coefs_)]).T
+        elif self.strategy == "brute":
+            return np.array(
+                [norm.ppf((rankdata(x_i) - 0.5) / len(x_i)) for x_i in x.T]
+            ).T
+        elif self.strategy == "boxcox":
+            return np.array(
+                [boxcox(x_i, lmbda=lmbda_i) for x_i, lmbda_i in zip(x.T, self.coefs_)]
+            ).T
         else:
             raise NotImplementedError("stategy='%s' not implemented." % self.strategy)
 
     def inverse_transform(self, y: np.ndarray) -> np.ndarray:
         """Recover original data from Gaussianized data."""
-        if self.strategy == 'lambert':
-            return np.array([inverse(y_i, tau_i) for y_i, tau_i in zip(y.T, self.coefs_)]).T
-        elif self.strategy == 'boxcox':
-            return np.array([(1. + lmbda_i * y_i) ** (1./lmbda_i) for y_i, lmbda_i in zip(y.T, self.coefs_)]).T
+        if self.strategy == "lambert":
+            return np.array(
+                [inverse(y_i, tau_i) for y_i, tau_i in zip(y.T, self.coefs_)]
+            ).T
+        elif self.strategy == "boxcox":
+            return np.array(
+                [
+                    (1.0 + lmbda_i * y_i) ** (1.0 / lmbda_i)
+                    for y_i, lmbda_i in zip(y.T, self.coefs_)
+                ]
+            ).T
         else:
-            raise NotImplementedError("Inversion not supported for gaussianization transform '%s'" % self.strategy)
+            raise NotImplementedError(
+                "Inversion not supported for gaussianization transform '%s'"
+                % self.strategy
+            )
 
-    def qqplot(self, x: np.ndarray, prefix: Text = 'qq', output_dir: Text = "/tmp/"):
+    def qqplot(self, x: np.ndarray, prefix: Text = "qq", output_dir: Text = "/tmp/"):
         """Show qq plots compared to normal before and after the transform."""
         x = _update_x(x)
         y = self.transform(x)
         n_dim = y.shape[1]
         for i in range(n_dim):
             stats.probplot(x[:, i], dist="norm", plot=plt)
-            plt.savefig(os.path.join(output_dir, prefix + '_%d_before.png' % i))
+            plt.savefig(os.path.join(output_dir, prefix + "_%d_before.png" % i))
             plt.clf()
             stats.probplot(y[:, i], dist="norm", plot=plt)
-            plt.savefig(os.path.join(output_dir, prefix + '_%d_after.png' % i))
+            plt.savefig(os.path.join(output_dir, prefix + "_%d_after.png" % i))
             plt.clf()
 
 
@@ -130,7 +155,7 @@ def w_d(z, delta):
     # Eq. 9
     if delta < _EPS:
         return z
-    return np.sign(z) * np.sqrt(np.real(special.lambertw(delta * z ** 2)) / delta)
+    return np.sign(z) * np.sqrt(np.real(special.lambertw(delta * z**2)) / delta)
 
 
 def w_t(y, tau):
@@ -149,7 +174,7 @@ def igmm(y: np.ndarray, tol: float = 1e-6, max_iter: int = 100):
     if np.std(y) < _EPS:
         return np.mean(y), np.std(y).clip(_EPS), 0
     delta0 = delta_init(y)
-    tau1 = (np.median(y), np.std(y) * (1. - 2. * delta0) ** 0.75, delta0)
+    tau1 = (np.median(y), np.std(y) * (1.0 - 2.0 * delta0) ** 0.75, delta0)
     for k in range(max_iter):
         tau0 = tau1
         z = (y - tau1[0]) / tau1[1]
@@ -162,7 +187,10 @@ def igmm(y: np.ndarray, tol: float = 1e-6, max_iter: int = 100):
             break
         else:
             if k == max_iter - 1:
-                warnings.warn("Warning: No convergence after %d iterations. Increase max_iter." % max_iter)
+                warnings.warn(
+                    "Warning: No convergence after %d iterations. Increase max_iter."
+                    % max_iter
+                )
     return tau1
 
 
@@ -173,9 +201,9 @@ def delta_gmm(z):
     def func(q):
         u = w_d(z, np.exp(q))
         if not np.all(np.isfinite(u)):
-            return 0.
+            return 0.0
         else:
-            k = kurtosis(u, fisher=True, bias=False)**2
+            k = kurtosis(u, fisher=True, bias=False) ** 2
             if not np.isfinite(k) or k > 1e10:
                 return 1e10
             else:
@@ -187,8 +215,8 @@ def delta_gmm(z):
 
 def delta_init(z):
     gamma = kurtosis(z, fisher=False, bias=False)
-    with np.errstate(all='ignore'):
-        delta0 = np.clip(1. / 66 * (np.sqrt(66 * gamma - 162.) - 6.), 0.01, 0.48)
+    with np.errstate(all="ignore"):
+        delta0 = np.clip(1.0 / 66 * (np.sqrt(66 * gamma - 162.0) - 6.0), 0.01, 0.48)
     if not np.isfinite(delta0):
         delta0 = 0.01
     return delta0
