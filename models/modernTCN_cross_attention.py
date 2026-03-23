@@ -279,7 +279,9 @@ class ModernTCN(nn.Module):
 
     Cross Attention 옵션:
     - use_cross_attention: True로 설정 시 dual branch cross attention 활성화
-    - cross_attention_layers: cross attention을 적용할 레이어 인덱스 리스트 (기본: 마지막 레이어만)
+    - cross_attention_layers: 적용할 conv 스택 인덱스 리스트 (0 .. num_layers-1).
+      기본은 [num_layers-1] (마지막만). 마지막 직전에도 넣으려면 예:
+      [num_layers - 2, num_layers - 1]  (num_layers >= 2일 때)
     - cross_attention_heads: cross attention head 수 (기본: 2, 파라미터 효율)
     """
 
@@ -303,7 +305,7 @@ class ModernTCN(nn.Module):
         # Cross Attention 설정
         self.use_cross_attention = configs.get("use_cross_attention", False)
         num_layers = len(configs["dims"])
-        # 기본값: 마지막 레이어에만 cross attention 적용 (파라미터 효율)
+        # 기본값: 마지막 레이어만. 여러 층에 넣으려면 예: [num_layers - 2, num_layers - 1]
         self.cross_attention_layers = configs.get(
             "cross_attention_layers",
             [num_layers - 1] if self.use_cross_attention else [],

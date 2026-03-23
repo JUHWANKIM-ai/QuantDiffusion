@@ -5,7 +5,7 @@ import numpy as np
 from utils.utils import *
 from copy import deepcopy
 import torch.nn.functional as F
-from torch.distributions import StudentT, Gamma
+from torch.distributions import StudentT, Chi2
 from utils.utils import inverse_scaling
 from utils.file_manager import quantDiffusionPath
 
@@ -19,18 +19,29 @@ def extract(a, t, x_shape):
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
 
-def sample_nig_noise(shape, alpha, beta, device):
+def sample_joint_student_t_noise(shape, df, device):
     """
-    NIG 스타일 노이즈: σ² ~ InvGamma(α, β), noise ~ N(0, σ²).
-    스케일 혼합으로 heavy-tail. E[σ²]=β/(α-1) → 단위분산이 되려면 beta=alpha-1 (α>1).
+    모든 자산(C)이 동일한 변동성 쇼크(V)를 공유하도록 샘플링.
+    shape: (B, T, C)
     """
-    batch = shape[0]
-    # Gamma(α, β) 샘플의 역수 = InvGamma 스케일 제곱
-    gamma_dist = Gamma(concentration=alpha, rate=beta)
-    sigma_sq = 1.0 / (gamma_dist.sample((batch,)) + 1e-8)
-    sigma_sq = sigma_sq.to(device).view(batch, *((1,) * (len(shape) - 1)))
+    B, T, C = shape
+    # 1. 표준 가우시안 노이즈 생성 (B, T, C)
     z = torch.randn(shape, device=device)
-    return z * torch.sqrt(sigma_sq.clamp(min=1e-8))
+
+    # 2. 공통 스케일링 인자 V 샘플링 (B, T, 1)
+    # 각 시점(T)마다 모든 자산(C)이 하나의 V를 공유함
+    # 주의: Chi2(df=길이1 벡터)는 batch_shape=(1,)이라 sample((B,T,1))이 (B,T,1,1)이 되어 z(B,T,C)와 브로드캐스트 불가.
+    df_t = torch.as_tensor(df, dtype=torch.float32, device=device).reshape(())
+    v = Chi2(df=df_t).sample((B, T, 1))
+
+    # 3. Student-t 노이즈 합성 (분산 1 정규화 포함)
+    # scale = sqrt((df-2)/df) * z / sqrt(v/df) => z * sqrt((df-2)/v)
+    if df > 2:
+        unit_noise = z * torch.sqrt((df - 2) / v)
+    else:
+        unit_noise = z * torch.sqrt(1.0 / v)  # df <= 2일 때 예외 처리
+
+    return unit_noise
 
 
 def sample_student_t_noise(shape, df, device, scale=None):
@@ -43,26 +54,6 @@ def sample_student_t_noise(shape, df, device, scale=None):
         scale = 1.0 if df <= 2 else ((df - 2) / df) ** 0.5
     d = StudentT(df=float(df), loc=0.0, scale=scale)
     return d.sample(shape).to(device)
-
-
-def sample_skewed_student_t_noise(
-    shape, df, skew_gamma, device, scale=None, standardize_per_sample=True
-):
-    """
-    Fernández–Steel 스타일 비대칭 Student-t: 대칭 t 샘플 z에 대해
-    w = z * skew_gamma (z>=0), w = z / skew_gamma (z<0). skew_gamma > 0, 1이면 대칭.
-    standardize_per_sample=True이면 (T,C) 축으로 배치별 평균 0·분산 1로 맞춤.
-    """
-    if skew_gamma <= 0:
-        raise ValueError("skew_gamma must be positive")
-    z = sample_student_t_noise(shape, df, device, scale=scale)
-    g = torch.as_tensor(skew_gamma, device=z.device, dtype=z.dtype)
-    w = torch.where(z >= 0, z * g, z / g)
-    if standardize_per_sample:
-        mean = w.mean(dim=(1, 2), keepdim=True)
-        std = w.std(dim=(1, 2), keepdim=True).clamp(min=1e-8)
-        w = (w - mean) / std
-    return w
 
 
 def generate_linear_schedule(T, low, high):
@@ -125,12 +116,8 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
             self.perturb_x = self.perturb_x_gaussian
         elif sampling_type == "student_t":
             self.perturb_x = self.perturb_x_student_t
-        elif sampling_type == "levy":
-            self.perturb_x = self.perturb_x_levy
-        elif sampling_type == "nig":
-            self.perturb_x = self.perturb_x_NIG
-        elif sampling_type == "skewed_student_t":
-            self.perturb_x = self.perturb_x_skewed_student_t
+        elif sampling_type == "joint_student_t":
+            self.perturb_x = self.perturb_x_joint_student_t
         else:
             raise ValueError(f"Invalid sample type: {sampling_type}")
 
@@ -172,65 +159,23 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
             + extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise
         )
 
-    def perturb_x_student_t(self, x, t, noise=None, df=5.0):
+    def perturb_x_student_t(self, x, t, noise):
         """
         Forward process with Student-t noise (heavy tails).
         x_t = sqrt(ᾱ_t)*x + sqrt(1-ᾱ_t)*noise, noise ~ StudentT(df).
         noise=None이면 내부에서 단위분산 Student-t 샘플링.
         """
-        if noise is None:
-            noise = sample_student_t_noise(x.shape, df, x.device)
         return (
             extract(self.sqrt_alphas_cumprod, t, x.shape) * x
             + extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise
         )
 
-    def perturb_x_skewed_student_t(self, x, t, noise=None, df=5.0, skew_gamma=1.25):
+    def perturb_x_joint_student_t(self, x, t, noise):
         """
-        비대칭 Student-t 전방 과정. noise=None이면 sample_skewed_student_t_noise 사용.
-        skew_gamma>1이면 양의 꼬리가 상대적으로 두꺼워짐.
+        Forward process with Student-t noise (heavy tails).
+        x_t = sqrt(ᾱ_t)*x + sqrt(1-ᾱ_t)*noise, noise ~ StudentT(df).
+        noise=None이면 내부에서 단위분산 Student-t 샘플링.
         """
-        if noise is None:
-            noise = sample_skewed_student_t_noise(x.shape, df, skew_gamma, x.device)
-        return (
-            extract(self.sqrt_alphas_cumprod, t, x.shape) * x
-            + extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise
-        )
-
-    def perturb_x_levy(self, x, t, noise=None, lambda_j=0.05, sigma_j=0.5):
-        """
-        Itô-Lévy Forward Process (Jump-Diffusion).
-        lambda_j: 점프 발생 빈도 (Intensity)
-        sigma_j: 점프의 크기 (Jump magnitude)
-        """
-        # 1. 가우시안 확산 부분 (Standard DDPM)
-        if noise is None:
-            noise = torch.randn_like(x)
-
-        x_t_gaussian = (
-            extract(self.sqrt_alphas_cumprod, t, x.shape) * x
-            + extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise
-        )
-
-        # 2. 레비 점프 부분 (Compound Poisson Process)
-        # 각 시점/배치마다 점프 여부를 결정하는 포아송 마스크
-        jump_mask = (torch.rand_like(x) < lambda_j).float()
-        jump_size = torch.randn_like(x) * sigma_j
-        jumps = jump_mask * jump_size
-
-        # 시간에 따라 점프 영향력도 누적 확산에 맞춰 조절
-        return (
-            x_t_gaussian
-            + extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * jumps
-        )
-
-    def perturb_x_NIG(self, x, t, noise=None, alpha=3.0, beta=2.0):
-        """
-        NIG(Normal-Inverse-Gamma) 전방 과정: σ² ~ InvGamma(α, β), noise ~ N(0, σ²).
-        스케일 혼합으로 heavy-tail. beta=alpha-1이면 E[σ²]=1.
-        """
-        if noise is None:
-            noise = sample_nig_noise(x.shape, alpha, beta, x.device)
         return (
             extract(self.sqrt_alphas_cumprod, t, x.shape) * x
             + extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise
@@ -241,7 +186,15 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
         t_idx = (
             t.long().clamp(0, self.num_timesteps - 1) if t.is_floating_point() else t
         )
-        noise = torch.randn_like(x, device=x.device)
+        if self.sampling_type == "gaussian":
+            noise = torch.randn_like(x, device=x.device)
+        elif self.sampling_type == "student_t":
+            noise = sample_student_t_noise(x.shape, 5.0, x.device)
+        elif self.sampling_type == "joint_student_t":
+            noise = sample_joint_student_t_noise(x.shape, 5.0, x.device)
+        else:
+            raise ValueError(f"Invalid sample type: {self.sampling_type}")
+
         perturbed_x = self.perturb_x(x, t_idx, noise)
         model_out = self.model(perturbed_x, t_idx)
 
@@ -319,12 +272,8 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
             return self._sample_gaussian(batch_size, device, use_ema)
         if self.sampling_type == "student_t":
             return self._sample_student_t(batch_size, device, use_ema, **kwargs)
-        if self.sampling_type == "levy":
-            return self._sample_levy(batch_size, device, use_ema, **kwargs)
-        if self.sampling_type == "nig":
-            return self._sample_NIG(batch_size, device, use_ema, **kwargs)
-        if self.sampling_type == "skewed_student_t":
-            return self._sample_skewed_student_t(batch_size, device, use_ema, **kwargs)
+        if self.sampling_type == "joint_student_t":
+            return self._sample_joint_student_t(batch_size, device, use_ema, **kwargs)
         raise ValueError(
             f"sample_type must be 'gaussian', 'student_t', 'skewed_student_t', 'levy', or 'nig', got {self.sampling_type!r}"
         )
@@ -343,25 +292,6 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
         x = x - x.mean(dim=1, keepdim=True)
         x = x / (x.std(dim=1, keepdim=True) + 1e-8)
         return x.cpu()
-
-    # @torch.no_grad()
-    # def _sample_student_t(self, batch_size, device, use_ema=True, df=5.0, memory_scale=0.1):
-    #     x = sample_student_t_noise((batch_size, self.seq_len, self.num_channels), df, device)
-    #     pred_x0 = None
-    #     for t in range(self.num_timesteps - 1, -1, -1):
-    #         t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
-    #         x_self_cond = pred_x0 if self.self_conditioning else None
-    #         x_recon = self.remove_noise(x, t_batch, use_ema, x_self_cond=x_self_cond)
-    #         if self.self_conditioning:
-    #             pred_x0 = x_recon
-    #         if t > 0:
-    #             z = sample_student_t_noise(x.shape, df, device)
-    #             vol_adj = 1.0 + memory_scale * torch.abs(x - x_recon).mean(dim=(1, 2), keepdim=True)
-    #             sigma_t = extract(self.sigma, t_batch, x.shape)
-    #             x = x_recon + (sigma_t * vol_adj * z)
-    #         else:
-    #             x = x_recon
-    #     return x.cpu()
 
     @torch.no_grad()
     def _sample_student_t(
@@ -398,93 +328,54 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
         return x.cpu()
 
     @torch.no_grad()
-    def _sample_skewed_student_t(
-        self,
-        batch_size,
-        device,
-        use_ema=True,
-        df=5.0,
-        skew_gamma=1.25,
-        memory_scale=0.1,
+    def _sample_joint_student_t(
+        self, batch_size, device, use_ema=True, df=5.0, memory_scale=0.1
     ):
-        """비대칭 Student-t 역샘플링: 초기·스텝 노이즈 모두 skewed t."""
+        """
+        역확산 과정 수정 사항:
+        1. sample_joint_student_t_noise 사용 (동조화 반영)
+        2. vol_adj 가중치 최적화 (VaR 에러 대응)
+        3. 마지막 강제 std 정규화 제거 (Tail 보존)
+        """
+        # 1. 분산 1을 맞추기 위한 정규화 인자
         std_norm = math.sqrt((df - 2) / df) if df > 2 else 1.0
-        x = (
-            sample_skewed_student_t_noise(
-                (batch_size, self.seq_len, self.num_channels), df, skew_gamma, device
-            )
-            * std_norm
+
+        # 2. 초기 노이즈 (t=T) 생성: 모든 자산이 동일한 V를 공유하도록 생성
+        # shape: (B, T, C)
+        x = sample_joint_student_t_noise(
+            (batch_size, self.seq_len, self.num_channels), df, device
         )
+
         for t in range(self.num_timesteps - 1, -1, -1):
             t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
+
+            # 현재 x에서 노이즈 성분을 제거하여 원본 x_0을 추정 (Reconstruction)
             x_recon = self.remove_noise(x, t_batch, use_ema)
+
             if t > 0:
-                z = (
-                    sample_skewed_student_t_noise(x.shape, df, skew_gamma, device)
-                    * std_norm
-                )
+                # [핵심] 매 스텝마다 모든 자산이 공유하는 '공통 충격' 노이즈 주입
+                z = sample_joint_student_t_noise(x.shape, df, device)
+
+                # vol_adj: 모델의 예측 오차가 큰 구간(불확실성)에서 노이즈를 증폭
+                # VaR 에러가 높다면 memory_scale을 0.2~0.3까지 시도해 보세요.
                 vol_adj = 1.0 + memory_scale * torch.abs(x - x_recon).mean(
                     dim=(1, 2), keepdim=True
                 )
-                sigma_t = extract(self.sigma, t_batch, x.shape)
-                x = x_recon + sigma_t * vol_adj * z
-            else:
-                x = x_recon
-        x = x - x.mean(dim=1, keepdim=True)
-        x = x / (x.std(dim=1, keepdim=True) + 1e-8)
-        return x.cpu()
-
-    @torch.no_grad()
-    def _sample_levy(
-        self, batch_size, device, use_ema=True, lambda_j=0.03, sigma_j=0.3
-    ):
-        # 1. 초기값 설정 (특수 목적이 없다면 1.0 권장)
-        x = torch.randn(batch_size, self.seq_len, self.num_channels, device=device)
-
-        # 2. 노이즈 스케일 미리 계산 (루프 밖으로 이동)
-        # 기댓값 기반 분산 보정: Var(z_g + z_j) = 1 + lambda * sigma^2
-        noise_scale = math.sqrt(1.0 + lambda_j * (sigma_j**2))
-
-        for t in range(self.num_timesteps - 1, -1, -1):
-            t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
-            x_recon = self.remove_noise(x, t_batch, use_ema)
-
-            if t > 0:
-                z_g = torch.randn_like(x)
-                # 점프 노이즈 생성
-                jump_mask = (torch.rand_like(x) < lambda_j).float()
-                z_j = jump_mask * torch.randn_like(x) * sigma_j
-
-                # [핵심] 합산 노이즈 정규화
-                z_total = (z_g + z_j) / noise_scale
 
                 sigma_t = extract(self.sigma, t_batch, x.shape)
-                x = x_recon + sigma_t * z_total
+                x = x_recon + (sigma_t * vol_adj * z)
             else:
                 x = x_recon
 
-        # 3. 최종 출력단 보정 (Instance Normalization 스타일)
-        # dim=1 (seq_len) 기준으로 평균 0, 표준편차 1 강제
+        # --- [중요] 마지막 단계 수정 ---
+        # x.mean() 제거는 유지하되, x.std()로 나누는 것은 주석 처리합니다.
+        # 꼬리 동조화 시나리오는 표준편차가 큰 것이 정상입니다.
+        # 이를 강제로 1로 맞추면 VaR 임계값이 가우시안 쪽으로 당겨져 에러가 납니다.
+
         x = x - x.mean(dim=1, keepdim=True)
+
+        # 만약 전체 스케일이 너무 튄다면, std() 대신 사전에 계산된
+        # GARCH의 '장기 평균 변동성' 등으로 스케일링하는 것이 훨씬 안전합니다.
         x = x / (x.std(dim=1, keepdim=True) + 1e-8)
 
-        return x.cpu()
-
-    @torch.no_grad()
-    def _sample_NIG(self, batch_size, device, use_ema=True, alpha=3.0, beta=2.0):
-        """NIG 샘플링: 초기 노이즈를 NIG 스타일로 두고 역방향은 동일 (remove_noise + NIG 스타일 추가 노이즈)."""
-        x = sample_nig_noise(
-            (batch_size, self.seq_len, self.num_channels), alpha, beta, device
-        )
-        for t in range(self.num_timesteps - 1, -1, -1):
-            t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
-            x_recon = self.remove_noise(x, t_batch, use_ema)
-            if t > 0:
-                z = sample_nig_noise(x.shape, alpha, beta, device)
-                sigma_t = extract(self.sigma, t_batch, x.shape)
-                x = x_recon + sigma_t * z
-            else:
-                x = x_recon
-        x = x - x.mean(dim=1, keepdim=True)
-        x = x / (x.std(dim=1, keepdim=True) + 1e-8)
         return x.cpu()
