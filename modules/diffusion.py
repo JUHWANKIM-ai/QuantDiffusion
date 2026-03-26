@@ -213,17 +213,17 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
         else:
             main_loss = torch.nn.functional.smooth_l1_loss(model_out, target)
 
-        alpha_bar = self.alphas_cumprod[t_idx]
-        alpha_bar = alpha_bar.clamp(min=1e-5, max=0.99999)
+        # alpha_bar = self.alphas_cumprod[t_idx]
+        # alpha_bar = alpha_bar.clamp(min=1e-5, max=0.99999)
 
-        snr = alpha_bar / (1.0 - alpha_bar)
-        min_snr_weights = torch.clamp(snr, max=10.0) / snr
-        min_snr_weights = min_snr_weights.view(-1, 1, 1)
+        # snr = alpha_bar / (1.0 - alpha_bar)
+        # min_snr_weights = torch.clamp(snr, max=10.0) / snr
+        # min_snr_weights = min_snr_weights.view(-1, 1, 1)
 
-        # backward()는 스칼라에만 사용 가능하므로 배치 차원을 평균으로 축소
-        weighted_loss = main_loss * min_snr_weights
+        # # backward()는 스칼라에만 사용 가능하므로 배치 차원을 평균으로 축소
+        # weighted_loss = main_loss * min_snr_weights
 
-        return weighted_loss.mean()
+        return main_loss.mean()
 
     def forward(self, x):
         b = x.shape[0]
@@ -246,7 +246,7 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
             # 1. v로부터 x0를 먼저 역산
             maybe_x0 = sqrt_ab * x - sqrt_1_ab * out
             # 2. x0를 강제로 [-1, 1] 범위로 가둠 (이게 평균/표준편차 폭주를 막는 핵심)
-            maybe_x0 = torch.clamp(maybe_x0, -3.0, 3.0)
+            # maybe_x0 = torch.clamp(maybe_x0, -3.0, 3.0)
             # 3. 정제된 x0로 다시 pred_noise 계산
             pred_noise = (x - sqrt_ab * maybe_x0) / (sqrt_1_ab + 1e-8)
 
@@ -290,7 +290,7 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
                 )
 
         x = x - x.mean(dim=1, keepdim=True)
-        x = x / (x.std(dim=1, keepdim=True) + 1e-8)
+        # x = x / (x.std(dim=1, keepdim=True) + 1e-8)
         return x.cpu()
 
     @torch.no_grad()
@@ -324,7 +324,7 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
                 x = x_recon
 
         x = x - x.mean(dim=1, keepdim=True)
-        x = x / (x.std(dim=1, keepdim=True) + 1e-8)
+        # x = x / (x.std(dim=1, keepdim=True) + 1e-8)
         return x.cpu()
 
     @torch.no_grad()
@@ -376,6 +376,6 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
 
         # 만약 전체 스케일이 너무 튄다면, std() 대신 사전에 계산된
         # GARCH의 '장기 평균 변동성' 등으로 스케일링하는 것이 훨씬 안전합니다.
-        x = x / (x.std(dim=1, keepdim=True) + 1e-8)
+        # x = x / (x.std(dim=1, keepdim=True) + 1e-8)
 
         return x.cpu()
