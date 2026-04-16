@@ -3,3 +3,4 @@ scratch/
 .vscode/
 result/
 *.txt
+lightning_logs/
