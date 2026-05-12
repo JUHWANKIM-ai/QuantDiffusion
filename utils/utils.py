@@ -89,229 +89,241 @@ def set_seed(seed: int):
     np.random.seed(seed)
 
 
-# """ Scale the log returns using Gaussianize and StandardScaler """
-# def scaling(data):
-#     scalers = []
-#     scaled_data = []
-
-#     for i in range(data.shape[1]):  # Iterate over features
-#         feature_data = data[:, i].reshape(-1, 1)  # Reshape to (samples, 1)
-#         standardScaler1 = StandardScaler()
-#         standardScaler2 = StandardScaler()
-
-#         gaussianize = Gaussianize()
-#         feature_scaled = standardScaler2.fit_transform(
-#             gaussianize.fit_transform(standardScaler1.fit_transform(feature_data))
-#         )
-
-#         # gaussianize = SinhArcsinhTransformer()
-#         # feature_data_ss1 = standardScaler1.fit_transform(feature_data)
-#         # gaussianize.fit(feature_data_ss1)
-#         # feature_data_sa = gaussianize.transform(feature_data_ss1)
-#         # feature_scaled = standardScaler2.fit_transform(feature_data_sa)
-
-#         # Scale data for the current feature
-
-#         # Append scalers and scaled data
-#         scalers.append((standardScaler1, standardScaler2, gaussianize))
-#         scaled_data.append(feature_scaled.flatten())  # Flatten back to (samples,)
-
-#     # Combine scaled features back into a single array
-#     scaled_data = np.array(scaled_data).T  # Transpose to shape (samples, features)
-#     return scaled_data, scalers
-
-
-# """ Inverse the scaling process for all features """
-
-
-# def inverse_scaling(y, scalers):
-#     y = y.cpu().detach().numpy()  # Convert to NumPy for compatibility with scalers
-#     y_original = np.zeros_like(y)  # Placeholder for original data
-
-#     for idx in range(y.shape[1]):
-
-#         standardScaler1, standardScaler2, gaussianize = scalers[idx]
-
-#         y_feature = y[:, idx, :]  # Shape: (batch_size, seq_len)
-
-#         # Normalize by batch mean and std for the current feature
-#         EPS = 1e-8
-#         y_feature = (y_feature - y_feature.mean(axis=0, keepdims=True)) / (
-#             y_feature.std(axis=0, keepdims=True) + EPS
-#         )
-
-#         # Perform inverse scaling step-by-step
-#         y_feature = standardScaler2.inverse_transform(y_feature)
-#         y_feature = np.array(
-#             [
-#                 gaussianize.inverse_transform(np.expand_dims(sample, 1))
-#                 for sample in y_feature
-#             ]
-#         ).squeeze()
-#         y_feature = standardScaler1.inverse_transform(y_feature)
-
-#         # Assign back the feature's inverse transformed data
-#         y_original[:, idx, :] = y_feature
-
-#     return y_original
-
-
-# import numpy as np
-# from sklearn.preprocessing import QuantileTransformer
-
-# def scaling(data):
-#     scalers = []
-#     scaled_data = []
-
-#     for i in range(data.shape[1]):  # Iterate over features
-#         feature_data = data[:, i].reshape(-1, 1)  # Reshape to (samples, 1)
-
-#         # QuantileTransformer 하나로 완벽한 정규분포 매핑 (StandardScaler 불필요)
-#         # n_quantiles는 데이터 샘플 수에 따라 조절할 수 있습니다 (기본값 1000)
-#         qt = QuantileTransformer(n_quantiles=min(200, len(feature_data)),
-#                 output_distribution='normal',
-#                 random_state=42,
-#                 subsample=int(1e9),)
-
-#         # Fit & Transform
-#         feature_scaled = qt.fit_transform(feature_data)
-
-#         # Append scalers and scaled data
-#         scalers.append(qt)
-#         scaled_data.append(feature_scaled.flatten())  # Flatten back to (samples,)
-
-#     # Combine scaled features back into a single array
-#     scaled_data = np.array(scaled_data).T  # Transpose to shape (samples, features)
-#     return scaled_data, scalers
-
-
-# """ Inverse the scaling process for all features """
-# def inverse_scaling(y, scalers):
-#     y = y.cpu().detach().numpy()  # Convert to NumPy for compatibility with scalers
-#     y_original = np.zeros_like(y)  # Placeholder for original data
-
-#     for idx in range(y.shape[1]):
-#         qt = scalers[idx]
-
-#         y_feature = y[:, idx, :]  # Shape: (batch_size, seq_len)
-
-#         # Normalize by batch mean and std for the current feature (기존 로직 유지)
-#         EPS = 1e-8
-#         y_feature = (y_feature - y_feature.mean(axis=0, keepdims=True)) / (y_feature.std(axis=0, keepdims=True) + EPS)
-
-#         # ---------------------------------------------------------
-#         # 최적화: for문 대신 reshape를 사용하여 한 번에 역변환 연산 수행
-#         # ---------------------------------------------------------
-#         batch_size, seq_len = y_feature.shape
-#         y_feature_flat = y_feature.reshape(-1, 1)  # (batch_size * seq_len, 1)로 평탄화
-
-#         # 역변환 수행
-#         y_feature_inv_flat = qt.inverse_transform(y_feature_flat)
-
-#         # 원래의 (batch_size, seq_len) 형태로 복구
-#         y_feature = y_feature_inv_flat.reshape(batch_size, seq_len)
-
-#         # Assign back the feature's inverse transformed data
-#         y_original[:, idx, :] = y_feature
-
-#     return y_original
-
-
-def scaling(data, p_lower=1, p_upper=99):
-    """
-    p_lower: 하위 백분위수 (예: 1은 하위 1%)
-    p_upper: 상위 백분위수 (예: 99는 상위 99%)
-    """
+""" Scale the log returns using Sinh-Arcsinh + Gaussianize + StandardScaler """
+def scaling(data):
     scalers = []
     scaled_data = []
 
     for i in range(data.shape[1]):
-        ss1, ss2, ss3 = StandardScaler(), StandardScaler(), StandardScaler()
-        sa_transformer = SinhArcsinhTransformer()
+        feature_data = data[:, i].reshape(-1, 1)
+
+        ss1, ss2 = StandardScaler(), StandardScaler()
+        # sa_transformer = SinhArcsinhTransformer()
         gaussianize = Gaussianize()
 
-        raw_feature = data[:, i].reshape(-1, 1)
-
-        # --- 1. Percentile 찾기 및 Winsorize ---
-        # 실제 데이터의 분포에서 경계값을 계산합니다.
-        lower_bound = np.percentile(raw_feature, p_lower)
-        upper_bound = np.percentile(raw_feature, p_upper)
-
-        # Fit용 데이터: 경계값을 벗어나는 점프(Jump)들을 경계값으로 고정
-        wins_feature = np.clip(raw_feature, lower_bound, upper_bound)
-
-        # --- 2. Fit(Winsorized) & Transform(Raw) 전략 ---
-
         # 1단계: SS1 -> Sinh-Arcsinh
-        ss1.fit(wins_feature)
-        wins_step1 = ss1.transform(wins_feature)
-        raw_step1 = ss1.transform(raw_feature)
+        step1 = ss1.fit_transform(feature_data)
+        # sa_transformer.fit(step1)
+        # step1_sa = sa_transformer.transform(step1)
 
-        sa_transformer.fit(wins_step1)
-        wins_step1_sa = sa_transformer.transform(wins_step1)
-        raw_step1_sa = sa_transformer.transform(raw_step1)
-
-        # 2단계: SS2 -> Lambert W
-        ss2.fit(wins_step1_sa)
-        wins_step2 = ss2.transform(wins_step1_sa)
-        raw_step2 = ss2.transform(raw_step1_sa)
-
-        gaussianize.fit(wins_step2)
-        wins_step2_g = gaussianize.transform(wins_step2)
-        raw_step2_g = gaussianize.transform(raw_step2)
+        # 2단계: SS2 -> Lambert W (Gaussianize)
+        # step2 = ss2.fit_transform(step1_sa)
+        step2_g = gaussianize.fit_transform(step1)
 
         # 3단계: SS3 (최종 정규화)
-        ss3.fit(wins_step2_g)
-        feature_scaled = ss3.transform(raw_step2_g)
+        feature_scaled = ss2.fit_transform(step2_g)
 
-        scalers.append((ss1, ss2, ss3, sa_transformer, gaussianize))
+        scalers.append((ss1, ss2, gaussianize))
         scaled_data.append(feature_scaled.flatten())
 
-    return np.array(scaled_data).T, scalers
+    scaled_data = np.array(scaled_data).T
+    return scaled_data, scalers
+
+
+""" Inverse the scaling process for all features """
+
 
 def inverse_scaling(y, scalers):
-    """
-    y shape: (batch_size, num_features, seq_len)
-    """
-    y = y.cpu().detach().numpy() if hasattr(y, 'cpu') else y
+    y = y.cpu().detach().numpy() if hasattr(y, "cpu") else y
     y_original = np.zeros_like(y)
 
     for idx in range(y.shape[1]):
-        # 저장된 스케일러들 꺼내기 (순서 주의: sa_transformer, gaussianize)
-        ss1, ss2, ss3, sa_transformer, gaussianize = scalers[idx]
+        ss1, ss2, gaussianize = scalers[idx]
 
-        y_feature = y[:, idx, :]
+        y_feature = y[:, idx, :]  # (batch, seq_len)
 
-        # Diffusion 출력값의 수치적 안정을 위한 보정 (선택 사항)
+        # Diffusion 출력값 수치 안정화
         EPS = 1e-8
-        y_feature = (y_feature - y_feature.mean(axis=0, keepdims=True)) / (y_feature.std(axis=0, keepdims=True) + EPS)
+        y_feature = (y_feature - y_feature.mean(axis=0, keepdims=True)) / (
+            y_feature.std(axis=0, keepdims=True) + EPS
+        )
 
         orig_shape = y_feature.shape
         y_flat = y_feature.reshape(-1, 1)
 
-        # --- 역변환 단계 (정방향의 역순: SS3 -> LW -> SS2 -> SA -> SS1) ---
-
-        # 1. SS3 역변환
-        y_flat = ss3.inverse_transform(y_flat)
-
-        # 2. Lambert W (Gaussianize) 역변환 (LW가 마지막에 적용됐으므로 먼저 역변환)
-        y_flat = np.array([
-            gaussianize.inverse_transform(sample.reshape(-1, 1))
-            for sample in y_flat
-        ]).reshape(-1, 1)
-
-        # 3. SS2 역변환
+        # 정방향의 역순: SS3 -> Gaussianize -> SS2 -> SinhArcsinh -> SS1
         y_flat = ss2.inverse_transform(y_flat)
-
-        # 4. Sinh-Arcsinh 역변환
-        y_flat = sa_transformer.inverse_transform(y_flat)
-
-        # 5. SS1 역변환
+        y_flat = np.array(
+            [gaussianize.inverse_transform(s.reshape(-1, 1)) for s in y_flat]
+        ).reshape(-1, 1)
         y_flat = ss1.inverse_transform(y_flat)
 
         y_original[:, idx, :] = y_flat.reshape(orig_shape)
 
     return y_original
+
+
+
+# def scaling(data, p_lower=1, p_upper=99):
+#     """
+#     p_lower: 하위 백분위수 (예: 1은 하위 1%)
+#     p_upper: 상위 백분위수 (예: 99는 상위 99%)
+#     """
+#     scalers = []
+#     scaled_data = []
+
+#     for i in range(data.shape[1]):
+#         ss1, ss2, ss3 = StandardScaler(), StandardScaler(), StandardScaler()
+#         sa_transformer = SinhArcsinhTransformer()
+#         gaussianize = Gaussianize()
+
+#         raw_feature = data[:, i].reshape(-1, 1)
+
+#         # --- 1. Percentile 찾기 및 Winsorize ---
+#         # 실제 데이터의 분포에서 경계값을 계산합니다.
+#         lower_bound = np.percentile(raw_feature, p_lower)
+#         upper_bound = np.percentile(raw_feature, p_upper)
+
+#         # Fit용 데이터: 경계값을 벗어나는 점프(Jump)들을 경계값으로 고정
+#         wins_feature = np.clip(raw_feature, lower_bound, upper_bound)
+
+#         # --- 2. Fit(Winsorized) & Transform(Raw) 전략 ---
+
+#         # 1단계: SS1 -> Sinh-Arcsinh
+#         ss1.fit(wins_feature)
+#         wins_step1 = ss1.transform(wins_feature)
+#         raw_step1 = ss1.transform(raw_feature)
+
+#         sa_transformer.fit(wins_step1)
+#         wins_step1_sa = sa_transformer.transform(wins_step1)
+#         raw_step1_sa = sa_transformer.transform(raw_step1)
+
+#         # 2단계: SS2 -> Lambert W
+#         ss2.fit(wins_step1_sa)
+#         wins_step2 = ss2.transform(wins_step1_sa)
+#         raw_step2 = ss2.transform(raw_step1_sa)
+
+#         gaussianize.fit(wins_step2)
+#         wins_step2_g = gaussianize.transform(wins_step2)
+#         raw_step2_g = gaussianize.transform(raw_step2)
+
+#         # 3단계: SS3 (최종 정규화)
+#         ss3.fit(wins_step2_g)
+#         feature_scaled = ss3.transform(raw_step2_g)
+
+#         scalers.append((ss1, ss2, ss3, sa_transformer, gaussianize))
+#         scaled_data.append(feature_scaled.flatten())
+
+#     return np.array(scaled_data).T, scalers
+
+# def inverse_scaling(y, scalers):
+#     """
+#     y shape: (batch_size, num_features, seq_len)
+#     """
+#     y = y.cpu().detach().numpy() if hasattr(y, 'cpu') else y
+#     y_original = np.zeros_like(y)
+
+#     for idx in range(y.shape[1]):
+#         # 저장된 스케일러들 꺼내기 (순서 주의: sa_transformer, gaussianize)
+#         ss1, ss2, ss3, sa_transformer, gaussianize = scalers[idx]
+
+#         y_feature = y[:, idx, :]
+
+#         # Diffusion 출력값의 수치적 안정을 위한 보정 (선택 사항)
+#         EPS = 1e-8
+#         y_feature = (y_feature - y_feature.mean(axis=0, keepdims=True)) / (y_feature.std(axis=0, keepdims=True) + EPS)
+
+#         orig_shape = y_feature.shape
+#         y_flat = y_feature.reshape(-1, 1)
+
+#         # --- 역변환 단계 (정방향의 역순: SS3 -> LW -> SS2 -> SA -> SS1) ---
+
+#         # 1. SS3 역변환
+#         y_flat = ss3.inverse_transform(y_flat)
+
+#         # 2. Lambert W (Gaussianize) 역변환 (LW가 마지막에 적용됐으므로 먼저 역변환)
+#         y_flat = np.array([
+#             gaussianize.inverse_transform(sample.reshape(-1, 1))
+#             for sample in y_flat
+#         ]).reshape(-1, 1)
+
+#         # 3. SS2 역변환
+#         y_flat = ss2.inverse_transform(y_flat)
+
+#         # 4. Sinh-Arcsinh 역변환
+#         y_flat = sa_transformer.inverse_transform(y_flat)
+
+#         # 5. SS1 역변환
+#         y_flat = ss1.inverse_transform(y_flat)
+
+#         y_original[:, idx, :] = y_flat.reshape(orig_shape)
+
+#     return y_original
+
+
+# def scaling(data, p_lower=0.5, p_upper=99.5):
+#     """
+#     Sinh-Arcsinh를 제외한 버전: Winsorize -> SS1 -> Gaussianize -> SS2
+#     p_lower/p_upper: Winsorize 분위수
+#     """
+#     scalers = []
+#     scaled_data = []
+
+#     for i in range(data.shape[1]):
+#         ss1, ss2 = StandardScaler(), StandardScaler()
+#         gaussianize = Gaussianize()
+
+#         raw_feature = data[:, i].reshape(-1, 1)
+
+#         # --- 1. Winsorize ---
+#         lower_bound = np.percentile(raw_feature, p_lower)
+#         upper_bound = np.percentile(raw_feature, p_upper)
+#         wins_feature = np.clip(raw_feature, lower_bound, upper_bound)
+
+#         # --- 2. Fit(Winsorized) & Transform(Raw) 전략 ---
+
+#         # 1단계: SS1
+#         ss1.fit(wins_feature)
+#         wins_step1 = ss1.transform(wins_feature)
+#         raw_step1 = ss1.transform(raw_feature)
+
+#         # 2단계: Gaussianize (Lambert W)
+#         gaussianize.fit(wins_step1)
+#         wins_step1_g = gaussianize.transform(wins_step1)
+#         raw_step1_g = gaussianize.transform(raw_step1)
+
+#         # 3단계: SS2 (최종 정규화)
+#         ss2.fit(wins_step1_g)
+#         feature_scaled = ss2.transform(raw_step1_g)
+
+#         scalers.append((ss1, ss2, gaussianize))
+#         scaled_data.append(feature_scaled.flatten())
+
+#     return np.array(scaled_data).T, scalers
+
+
+# def inverse_scaling(y, scalers):
+#     """
+#     y shape: (batch_size, num_features, seq_len)
+#     scalers: (ss1, ss2, gaussianize) 튜플 리스트
+#     """
+#     y = y.cpu().detach().numpy() if hasattr(y, "cpu") else y
+#     y_original = np.zeros_like(y)
+
+#     for idx in range(y.shape[1]):
+#         ss1, ss2, gaussianize = scalers[idx]
+
+#         y_feature = y[:, idx, :]
+
+#         # 수치 안정화
+#         EPS = 1e-8
+#         y_feature = (y_feature - y_feature.mean(axis=0, keepdims=True)) / (
+#             y_feature.std(axis=0, keepdims=True) + EPS
+#         )
+
+#         orig_shape = y_feature.shape
+#         y_flat = y_feature.reshape(-1, 1)
+
+#         # 정방향의 역순: SS2 -> Gaussianize -> SS1
+#         y_flat = ss2.inverse_transform(y_flat)
+#         y_flat = np.array(
+#             [gaussianize.inverse_transform(s.reshape(-1, 1)) for s in y_flat]
+#         ).reshape(-1, 1)
+#         y_flat = ss1.inverse_transform(y_flat)
+
+#         y_original[:, idx, :] = y_flat.reshape(orig_shape)
+
+#     return y_original
 
 
 def count_parameters(model):
