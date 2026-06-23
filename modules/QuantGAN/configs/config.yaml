@@ -1,0 +1,30 @@
+# Data-related settings
+file_name: 'indices'
+data_dir: 'data/'
+result_dir: 'results/'
+log_interval: 5
+n_vars: 6
+n_steps: 128
+
+# Training settings
+device: cuda
+seed: 0
+batch_size: 256
+n_epochs: 300
+
+# Algorithm-related settings
+algo: QuantGAN
+
+# Model settings
+G_hidden_dim: 120
+D_hidden_dim: 120
+output_dim: 1
+noise_dim: 6
+clip : 0.01
+
+# Learning rates
+lr_G: 0.0002
+lr_D: 0.0001
+D_steps_per_G_step: 1
+
+
