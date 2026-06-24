@@ -40,9 +40,12 @@ class TradingStrategy:
 
     def execute_trades_at_t(self, signals: torch.Tensor, prices: torch.Tensor, t: int):
         """
-        Executes trades based on the signals for a batch of assets.
+        Executes trades based on the signals for a batch of assets. (Long/Short 대칭)
+        +1 = 롱 진입, -1 = 숏 진입, 0 = 유지.
+        신호가 오면 기존 포지션을 먼저 청산(롱이면 매도, 숏이면 환매)한 뒤 목표 방향으로 진입한다.
+        포지션은 부호 있는 값(롱 +, 숏 -)으로 관리되어 하락에서도 PnL(숏 수익)이 발생한다.
 
-        :param signals: Tensor of shape [N, d] where -1 = sell, 0 = do nothing, 1 = buy.
+        :param signals: Tensor of shape [N, d] where -1 = go short, 0 = hold, 1 = go long.
         :param prices: Tensor of shape [N, d] representing the prices of the assets.
         :param t: execution time
 
@@ -50,28 +53,33 @@ class TradingStrategy:
         """
         N, d = signals.shape  # Number of batches and assets
 
-        updated_positions = self.positions[:, t, :].clone()  # Copy positions to update # modified t-1-> t
-        updated_capital = self.remaining_capital[:, t].clone()  # Copy remaining capital to update # modified t-1-> t
+        updated_positions = self.positions[:, t, :].clone()  # (N, d)  # modified t-1-> t
+        updated_capital = self.remaining_capital[:, t].clone()  # (N,)  # modified t-1-> t
 
-        for n in range(N):  # Loop over each batch
-            for i in range(d):  # Loop over each asset
+        # 배치(N) 벡터화: 샘플 n 끼리는 독립이라 텐서 연산으로 한 번에 처리.
+        # 자본이 자산 간 순차로 공유되므로 자산 루프(i)만 유지 (결과는 기존 이중루프와 동일).
+        for i in range(d):
+            sig = signals[:, i]                  # (N,)
+            price = prices[:, i]                 # (N,)
+            traded = sig != 0                    # (N,) bool
+            if not bool(torch.any(traded)):
+                continue
+            zeros = torch.zeros_like(price)
 
-                current_signal = signals[n, i]
-                current_price = prices[n, i]
+            # 1) 기존 포지션 청산 (신호 있는 샘플만): pos>0 매도 / pos<0 환매, 부호로 동일 처리
+            updated_capital = updated_capital + torch.where(traded, updated_positions[:, i] * price, zeros)
+            updated_positions[:, i] = torch.where(traded, zeros, updated_positions[:, i])
 
-                if current_signal == 1:  # Buy signal
-                    units_to_buy = self.validate_buy(current_price, updated_capital[n])
-
-                    updated_positions[n, i] += units_to_buy
-                    updated_capital[n] -= units_to_buy * current_price
-
-                elif current_signal == -1:  # Sell signal
-                    # Sell all units of this asset
-                    units_to_sell = updated_positions[n, i].clone()
-                    updated_positions[n, i] = 0  # Set position to 0 after selling
-                    updated_capital[n] += units_to_sell * current_price  # Add the proceeds from the sale to capital
-
-        # If signal is 0, do nothing (no need to update)
+            # 2) 목표 방향 진입 (규모는 long/short 동일하게 산정)
+            units = self.validate_buy(price, updated_capital)   # (N,) 양수
+            long_m = (sig == 1)
+            short_m = (sig == -1)
+            # 롱 진입
+            updated_positions[:, i] = updated_positions[:, i] + torch.where(long_m, units, zeros)
+            updated_capital = updated_capital - torch.where(long_m, units * price, zeros)
+            # 숏 진입 (음수 포지션, 매도 대금 수취)
+            updated_positions[:, i] = updated_positions[:, i] - torch.where(short_m, units, zeros)
+            updated_capital = updated_capital + torch.where(short_m, units * price, zeros)
 
         return updated_capital, updated_positions
 
@@ -90,12 +98,12 @@ class TradingStrategy:
 
     def validate_buy(self, price, current_capital):
         """
-        Validates if enough capital is available for the trade.
-        Buys as much as possible within limits if capital is insufficient.
+        진입 규모(양수 units) 산정. price/current_capital 이 배치 텐서(N,)여도 동작하도록 벡터화.
+        (기존 스칼라 min/max 로직과 동일: min(max_units, capital//price) 를 min_trade_size 로 하한)
         """
         max_units = self.truncate(self.max_capital_per_asset / price)
-        units_to_buy = min(max_units, self.truncate(current_capital / price))
-        return max(units_to_buy, self.min_trade_size)
+        units = torch.minimum(max_units, self.truncate(current_capital / price))
+        return torch.clamp(units, min=self.min_trade_size)
 
     def truncate(self, units):
         truncated_units = torch.trunc(units / self.min_trade_size) * self.min_trade_size
@@ -278,8 +286,6 @@ class MeanReversionStrategy(TradingStrategy):
 
                 signals[buy_cross,  t, i] =  1
                 signals[sell_cross, t, i] = -1
-        nonzero_count = (signals[0] != 0).sum().item()
-        print(nonzero_count)  # 출력: 3
         return signals
 
 
@@ -331,8 +337,6 @@ class TrendFollowingStrategy(TradingStrategy):
                     # Sell signal: short-term MA crosses below long-term MA
                     sell_mask = (prev_short_ma >= prev_long_ma) & (short_ma[:, t] < long_ma[:, t])
                     signals[sell_mask, t, i] = -1
-        nonzero_count = (signals[0] != 0).sum().item()
-        print(nonzero_count)  # 출력: 3
         return signals
 
 
@@ -384,9 +388,7 @@ class VolatilityTradingStrategy(TradingStrategy):
 
                 signals[buy_cross,  t, i] =  1
                 signals[sell_cross, t, i] = -1
-                
-        nonzero_count = (signals[0] != 0).sum().item()
-        print(nonzero_count)  # 출력: 3
+
         return signals
 
 
