@@ -488,7 +488,8 @@ def _fast_acf_2d(data, nlags):
 # ---------------------------------------------------------
 # 1. ACF 비교 시각화 (초고속 연산 + 고해상도 투명 배경)
 # ---------------------------------------------------------
-def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=None):
+def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=None,
+                        out_dir=None, name=None):
     data_transforms = [lambda x: x, np.abs, np.square]
     titles = ["Identity log returns", "Absolute log returns", "Squared log returns"]
 
@@ -546,7 +547,13 @@ def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=Non
         plt.tight_layout()
 
         # 파일로 저장할 경우 투명 배경(transparent=True) 유지
-        if sampling_type:
+        if out_dir is not None:                       # 타입별 폴더 저장 (파일명에 모델 tag)
+            os.makedirs(out_dir, exist_ok=True)
+            plt.savefig(
+                f"{out_dir}/{name}_acf_asset_{i}.png",
+                dpi=400, transparent=True, bbox_inches="tight",
+            )
+        elif sampling_type:
             os.makedirs(
                 f"{file_manager.get_image_path()}/{sampling_type}", exist_ok=True
             )
@@ -565,7 +572,7 @@ def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=Non
 # 2. 상관계수 히트맵 (고해상도 투명 배경)
 # ---------------------------------------------------------
 def plot_correlation_heatmap(
-    correlation_matrix, title, feature_names, sampling_type=None
+    correlation_matrix, title, feature_names, sampling_type=None, out_dir=None, name=None
 ):
     # dpi=400 및 피규어 투명화
     fig, ax = plt.subplots(figsize=(5, 4), dpi=400)
@@ -590,7 +597,13 @@ def plot_correlation_heatmap(
 
     plt.tight_layout()
 
-    if sampling_type:
+    if out_dir is not None:                            # 타입별 폴더 저장 (파일명에 모델 tag)
+        os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(
+            f"{out_dir}/{name}_correlation_{title}.png",
+            dpi=400, transparent=True, bbox_inches="tight",
+        )
+    elif sampling_type:
         os.makedirs(f"{file_manager.get_image_path()}/{sampling_type}", exist_ok=True)
         plt.savefig(
             f"{file_manager.get_image_path()}/{sampling_type}/correlation_heatmap_{title}.png",
@@ -613,6 +626,8 @@ def plot_cumulative_return_dist(
     n_assets=6,
     bins_n=81,
     sampling_type=None,
+    out_dir=None,
+    name=None,
 ):
     for j in range(n_assets):
         # dpi=400 및 투명도 설정
@@ -673,7 +688,13 @@ def plot_cumulative_return_dist(
 
         plt.tight_layout()
 
-        if sampling_type:
+        if out_dir is not None:                       # 타입별 폴더 저장 (파일명에 모델 tag)
+            os.makedirs(out_dir, exist_ok=True)
+            plt.savefig(
+                f"{out_dir}/{name}_cumret_asset_{j}.png",
+                dpi=400, transparent=True, bbox_inches="tight",
+            )
+        elif sampling_type:
             os.makedirs(
                 f"{file_manager.get_image_path()}/{sampling_type}", exist_ok=True
             )
@@ -686,6 +707,59 @@ def plot_cumulative_return_dist(
 
         plt.close()
         gc.collect()
+
+
+def plot_hist_row_by_model(real_bct, fakes_by_tag, label_map=None, window=5,
+                           bins_n=81, out_path=None, asset_idx=None):
+    """`window`일 누적 로그수익률 히스토그램을 모델별로 한 줄(1 x M)에 나란히.
+    각 subplot: 실데이터(파랑) vs 해당 모델 합성(주황). 논문용 투명 배경.
+
+    real_bct:      (B, C, T) 실데이터
+    fakes_by_tag:  {tag: (B, C, T)}  (열 순서 = dict 순서)
+    label_map:     {tag: 표시이름}  (없으면 tag 그대로)
+    asset_idx:     None 이면 전체 자산 풀링, 정수면 해당 자산만 사용
+    """
+    def _wday_dist(bct, w):
+        if asset_idx is None:
+            arr = bct.reshape(-1, bct.shape[-1])           # (B*C, T) 샘플·자산 풀링
+        else:
+            arr = bct[:, asset_idx, :]                     # (B, T) 특정 자산만
+        cs = np.insert(np.cumsum(arr, axis=1), 0, 0, axis=1)
+        return (cs[:, w:] - cs[:, :-w]).ravel()
+
+    tags = list(fakes_by_tag.keys())
+    M = len(tags)
+    real_dist = _wday_dist(np.asarray(real_bct), window)
+    # 원래 plot_cumulative_return_dist 와 동일: bins 는 전체 min~max 에 깔고 xlim 만 분위로 자름
+    bins = np.linspace(real_dist.min(), real_dist.max(), bins_n)
+    lo, hi = np.quantile(real_dist, [0.001, 0.999])
+
+    fig, axs = plt.subplots(nrows=1, ncols=M, figsize=(5 * M, 4), dpi=400)
+    fig.patch.set_alpha(0.0)
+    if M == 1:
+        axs = [axs]
+
+    for ax, tag in zip(axs, tags):
+        ax.set_facecolor("none")
+        fake_dist = _wday_dist(np.asarray(fakes_by_tag[tag]), window)
+        sns.histplot(real_dist, bins=bins, kde=False, ax=ax, color="tab:blue",
+                     alpha=0.5, stat="density", label="Historical")
+        sns.histplot(fake_dist, bins=bins, kde=False, ax=ax, color="tab:orange",
+                     alpha=0.5, stat="density", label="Synthetic")
+        ax.set_xlim(lo, hi)
+        ax.yaxis.grid(True, alpha=0.3)
+        ax.set_title((label_map or {}).get(tag, tag), fontsize=14, fontweight="bold")
+        ax.set_xlabel(f"Cumulative log return ({window} Day)", fontsize=12)
+        ax.set_ylabel("Density" if ax is axs[0] else "", fontsize=12)
+    axs[0].legend()
+    plt.tight_layout()
+
+    if out_path is not None:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        plt.savefig(out_path, dpi=400, transparent=True, bbox_inches="tight")
+        print(f"[hist] saved -> {out_path}")
+    plt.close()
+    gc.collect()
 
 
 def plot_transformations_comparison(

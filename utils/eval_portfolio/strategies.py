@@ -40,12 +40,12 @@ class TradingStrategy:
 
     def execute_trades_at_t(self, signals: torch.Tensor, prices: torch.Tensor, t: int):
         """
-        Executes trades based on the signals for a batch of assets. (Long/Short 대칭)
-        +1 = 롱 진입, -1 = 숏 진입, 0 = 유지.
-        신호가 오면 기존 포지션을 먼저 청산(롱이면 매도, 숏이면 환매)한 뒤 목표 방향으로 진입한다.
-        포지션은 부호 있는 값(롱 +, 숏 -)으로 관리되어 하락에서도 PnL(숏 수익)이 발생한다.
+        Executes trades based on the signals for a batch of assets. (롱 온리)
+        +1 = 롱 진입, -1 = 청산(보유분 매도 -> 현금), 0 = 유지.
+        신호가 오면 기존 보유분을 먼저 청산한 뒤, +1 이면 다시 롱으로 진입한다.
+        포지션은 항상 0 이상 (숏 없음).
 
-        :param signals: Tensor of shape [N, d] where -1 = go short, 0 = hold, 1 = go long.
+        :param signals: Tensor of shape [N, d] where -1 = sell to flat, 0 = hold, 1 = go long.
         :param prices: Tensor of shape [N, d] representing the prices of the assets.
         :param t: execution time
 
@@ -66,20 +66,15 @@ class TradingStrategy:
                 continue
             zeros = torch.zeros_like(price)
 
-            # 1) 기존 포지션 청산 (신호 있는 샘플만): pos>0 매도 / pos<0 환매, 부호로 동일 처리
+            # 1) 기존 보유분 청산 (신호 있는 샘플만): 보유 롱을 매도해 현금화
             updated_capital = updated_capital + torch.where(traded, updated_positions[:, i] * price, zeros)
             updated_positions[:, i] = torch.where(traded, zeros, updated_positions[:, i])
 
-            # 2) 목표 방향 진입 (규모는 long/short 동일하게 산정)
+            # 2) 롱 진입만 (sig == 1). 숏 없음 -> -1 은 청산(flat)으로만 작동.
             units = self.validate_buy(price, updated_capital)   # (N,) 양수
             long_m = (sig == 1)
-            short_m = (sig == -1)
-            # 롱 진입
             updated_positions[:, i] = updated_positions[:, i] + torch.where(long_m, units, zeros)
             updated_capital = updated_capital - torch.where(long_m, units * price, zeros)
-            # 숏 진입 (음수 포지션, 매도 대금 수취)
-            updated_positions[:, i] = updated_positions[:, i] - torch.where(short_m, units, zeros)
-            updated_capital = updated_capital + torch.where(short_m, units * price, zeros)
 
         return updated_capital, updated_positions
 
