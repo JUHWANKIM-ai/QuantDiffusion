@@ -4,3 +4,4 @@ scratch/
 result/
 *.txt
 lightning_logs/
+.claude
