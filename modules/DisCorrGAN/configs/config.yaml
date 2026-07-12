@@ -1,0 +1,43 @@
+# Data-related settings
+data_dir: 'data/'
+n_vars: 6
+n_steps: 256
+
+# Training settings
+device: cuda
+seed: 1
+batch_size: 256
+n_epochs: 200
+
+# Algorithm-related settings
+algo: GAN
+generator: TCN
+discriminator: TCN
+
+# Model settings ㅇ
+noise_dim: 3 # Noise dimension
+hidden_dim: 48
+D_hidden_dim: 48
+output_dim: 1
+
+# Learning rates
+lr_G: 0.0002
+lr_D: 0.0001
+D_steps_per_G_step: 2
+corr_loss_type: 'l1'       # 'l2' or 'l1' or 'fro'
+lambda_gp: 10.0
+step_size: 16
+G_dropout: 0.0
+D_dropout: 0.2
+corr_weight: 1.0
+rampup_epochs: 40
+
+# Additional settings
+gp: True
+W: 10.0                   # scale parameter for W
+alphas: [0.05]            # quantiles
+score: 'quant'            # score function
+project: True             # Project into constraint set
+temp: 1 # 0.01            # multiplier of temperature
+latent_dim: 256 # 1000    # dimensionality of the latent space
+
