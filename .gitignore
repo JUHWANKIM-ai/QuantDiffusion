@@ -1,4 +1,3 @@
-data/
 scratch/
 .vscode/
 result/
@@ -6,3 +5,5 @@ result/
 lightning_logs/
 .claude
 main.tex
+data/TailGAN/
+modules/diffusionTS/Data
