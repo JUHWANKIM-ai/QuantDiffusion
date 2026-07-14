@@ -213,16 +213,6 @@ class TimeSeriesGaussianDiffusion(torch.nn.Module):
         else:
             main_loss = torch.nn.functional.smooth_l1_loss(model_out, target)
 
-        # alpha_bar = self.alphas_cumprod[t_idx]
-        # alpha_bar = alpha_bar.clamp(min=1e-5, max=0.99999)
-
-        # snr = alpha_bar / (1.0 - alpha_bar)
-        # min_snr_weights = torch.clamp(snr, max=10.0) / snr
-        # min_snr_weights = min_snr_weights.view(-1, 1, 1)
-
-        # # backward()는 스칼라에만 사용 가능하므로 배치 차원을 평균으로 축소
-        # weighted_loss = main_loss * min_snr_weights
-
         return main_loss.mean()
 
     def forward(self, x):
