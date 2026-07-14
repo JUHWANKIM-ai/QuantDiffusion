@@ -108,8 +108,6 @@ Best in **bold**, second best in *italic*; lower is better.
 QuantDiffusion is best on 12 of 17 fidelity metrics and top-2 on 15, and it attains the smallest VaR/ES error
 at every confidence level, staying nearly flat rather than degrading deeper into the tail.
 
-![Autocorrelation of identity / absolute / squared returns for JPM (QuantDiffusion vs historical).](result/images/acf/baseline_acf_asset_2.png)
-
 ### Ablation
 
 Removing one component at a time (best in **bold**, second best *italic*; lower is better).
@@ -200,8 +198,6 @@ the cosine schedule was selected.
 The dataset is sourced from CRSP; `3_visualization.ipynb` cross-checks it against public yfinance data. The
 index and commodity series match closely, while JP Morgan shows a minor difference (source/adjustment
 conventions).
-
-![CRSP dataset (indices.csv) cross-checked against yfinance.](result/images/yfinance_match.png)
 
 ## Repository layout
 
