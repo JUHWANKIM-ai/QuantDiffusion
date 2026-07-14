@@ -1,6 +1,6 @@
-data/
-scratch/
-.vscode/
-result/
 *.txt
-lightning_logs/
+.vscode
+.claude
+scratch/
+data/TailGAN/
+modules/diffusionTS/Data

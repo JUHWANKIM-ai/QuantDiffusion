@@ -107,7 +107,7 @@ def select_best_epoch(config, scalers, training_data):
         generator.load_state_dict(torch.load(ckpt, map_location=config.device))
         generator.eval()
         with torch.no_grad():
-            noise = torch.randn(1000, config.noise_dim, config.n_steps, device=config.device)
+            noise = torch.randn(100, config.noise_dim, config.n_steps, device=config.device)
             fake = generator(noise)
         emd = compute_avg_emd(real_data, inverse_scaling(fake, scalers), window=100)
         if emd < min_dist:
