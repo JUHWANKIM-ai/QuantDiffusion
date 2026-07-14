@@ -135,7 +135,7 @@ class DilatedReparamConv(nn.Module):
         return self.dropout(out)
 
 
-class DCMTCN(nn.Module):
+class DMSTCN(nn.Module):
     """TCN that takes x and timestep t as input and outputs x (same shape). Time conditioning like UNet."""
 
     def __init__(self, configs):
