@@ -333,8 +333,8 @@ def count_parameters(model):
     # 전체(Total) 파라미터 수
     total_params = sum(p.numel() for p in model.parameters())
 
-    print(f"✅ 전체 파라미터 수: {total_params:,}")
-    print(f"✅ 학습 가능한 파라미터 수: {trainable_params:,}")
+    print(f"전체 파라미터 수: {total_params:,}")
+    print(f"학습 가능한 파라미터 수: {trainable_params:,}")
     return total_params
 
 

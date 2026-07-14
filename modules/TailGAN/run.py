@@ -128,7 +128,7 @@ def select_best_epoch(TG, real_bct, ckpt_dir, sample_n, min_epoch=2000):
         raise RuntimeError("no generator checkpoints were saved during training")
     ckpts = [c for c in all_ckpts if _ep(c) >= min_epoch]
     if not ckpts:
-        print(f"[select] ⚠️ epoch>={min_epoch} 체크포인트 없음 -> 전체 epoch 에서 선택")
+        print(f"[select] epoch>={min_epoch} 체크포인트 없음 -> 전체 epoch 에서 선택")
         ckpts = all_ckpts
 
     G = TG.Generator()
@@ -264,7 +264,7 @@ def select_ensemble(TG, real_bct, ckpt_dir, sample_n, num_nn, screen_pct, gen_da
     for m in survivors:
         ckpts = sorted(glob.glob(join(ckpt_dir, f"generator_id{m}_E*.pt")), key=_ep)
         if not ckpts:
-            print(f"[select] ⚠️ model {m}: no checkpoints, skip")
+            print(f"[select] model {m}: no checkpoints, skip")
             continue
         bp, bv = _pick_epoch(TG, ckpts, metric, real_bct, real_pnl, sample_n, alphas)
         best[m] = bp
