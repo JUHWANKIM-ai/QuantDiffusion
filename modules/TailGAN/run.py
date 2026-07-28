@@ -47,6 +47,7 @@ N_ROWS, N_COLS = 6, 256
 TRAIN_RATIO = 0.7
 N_SETS = 5            # number of synthetic sets (0.npy ... 4.npy)
 SET_SIZE = 2000       # samples per set
+STATIC_PORT_SEED = 0  # see ensure_static_basket
 
 
 def build_windows():
@@ -206,19 +207,54 @@ def select_by_vares(TG, real_bct, ckpt_dir, sample_n, alphas=(0.05, 0.025, 0.01)
     return best
 
 
-def screen_ensemble(gen_data_path, num_nn, thres_pct=50):
-    """TailGAN convergence screen: keep models whose final generator loss <= thres_pct percentile.
+def ensure_static_basket(gsp, n_rows=N_ROWS, n_ports=50, static_way="LShort"):
+    """Put the evaluation basket in place, never redrawing it.
 
-    Based on training loss only (no look-forward bias), as in the original Screen_Ensemble.
+    Delegates to tailgan_eval so training and evaluation cannot drift onto
+    different baskets; see tailgan_eval.ensure_static_basket for why redrawing it
+    invalidates every number in the result tables.
     """
-    finals = []
+    import tailgan_eval
+
+    gsp.your_path = YOUR_PATH
+    gsp.trans_parent_data_path = join(YOUR_PATH, "Static_Port_Transform")
+    os.makedirs(gsp.trans_parent_data_path, exist_ok=True)
+    return tailgan_eval.ensure_static_basket(PROJECT, gsp, n_rows=n_rows,
+                                             n_ports=n_ports,
+                                             static_way=static_way)
+
+
+def screen_ensemble(gen_data_path, num_nn, thres_pct=50, criterion="min"):
+    """TailGAN convergence screen: keep models whose generator loss <= thres_pct percentile.
+
+    Training loss only, no look-forward bias, as in the original Screen_Ensemble.
+
+    The original screens on the FINAL generator loss. That assumes the loss is still
+    at its best when training stops. With the discriminator warmup in place it is
+    not: the loss reaches its floor near epoch 600 and then climbs as the critic
+    loses accuracy again (measured: floor gap +0.037 at epoch 600, +1.028 at 1999).
+    Screening on the final value therefore ranks models by how far the critic had
+    drifted at the last epoch, not by how well the generator converged, and can
+    discard a model whose epoch 600 was excellent. criterion="min" uses each
+    model's best epoch instead, which is what "models with a good converge" means
+    once the tail of training is no longer monotone. Both rankings are printed.
+    """
+    finals, mins = [], []
     for m in range(num_nn):
         loss = np.load(join(gen_data_path, f"loss_id{m}.npy"))   # (2, n_epochs): rows = [D, G]
-        finals.append(float(loss[1, -1]))                        # final G loss
-    thr = float(np.percentile(finals, thres_pct))
-    survivors = [m for m in range(num_nn) if finals[m] <= thr]
+        finals.append(float(loss[1, -1]))
+        mins.append(float(np.min(loss[1])))
+    vals = mins if criterion == "min" else finals
+    thr = float(np.percentile(vals, thres_pct))
+    survivors = [m for m in range(num_nn) if vals[m] <= thr]
     print("[screen] final G-loss: " + ", ".join(f"m{m}={v:.4f}" for m, v in enumerate(finals)))
-    print(f"[screen] threshold(<= p{thres_pct})={thr:.4f} -> survivors {survivors}")
+    print("[screen] min   G-loss: " + ", ".join(f"m{m}={v:.4f}" for m, v in enumerate(mins)))
+    print(f"[screen] criterion={criterion}, threshold(<= p{thres_pct})={thr:.4f} "
+          f"-> survivors {survivors}")
+    alt = float(np.percentile(finals if criterion == "min" else mins, thres_pct))
+    other = [m for m in range(num_nn)
+             if (finals[m] if criterion == "min" else mins[m]) <= alt]
+    print(f"[screen] the other criterion would have kept {other}")
     return survivors
 
 
@@ -250,14 +286,15 @@ def _pick_epoch(TG, ckpts, metric, real_bct, real_pnl, sample_n, alphas=(0.05, 0
 
 
 def select_ensemble(TG, real_bct, ckpt_dir, sample_n, num_nn, screen_pct, gen_data_path,
-                    metric="vares", alphas=(0.05, 0.025, 0.01)):
+                    metric="vares", alphas=(0.05, 0.025, 0.01), screen_by="min"):
     """Original TailGAN ensemble selection: screen by convergence, then pick each survivor's
     best epoch by `metric`. Returns {model_index: best_ckpt_path}. (num_nn==1 -> single model.)
     """
     def _ep(p):
         return int(re.search(r"_E(\d+)", p).group(1))
 
-    survivors = screen_ensemble(gen_data_path, num_nn, screen_pct) if num_nn > 1 else [0]
+    survivors = (screen_ensemble(gen_data_path, num_nn, screen_pct, screen_by)
+                 if num_nn > 1 else [0])
     real_pnl = (TG.Compute_PNL(TG.Tensor(real_bct)).cpu().detach().numpy()
                 if metric == "vares" else None)
     best = {}
@@ -300,6 +337,135 @@ def generate_ensemble(TG, weight_paths, n_sets, set_size=SET_SIZE):
             print(f"[gen] set {s}: shape={fake_data.shape} (pooled from {k} model(s)) -> {out_path}")
 
 
+def train_single_warm(TG, o, dataloader, model_index, seed, warmup_steps, warmup_lr):
+    """TailGAN.Train_Single plus a discriminator warmup and per component logging.
+
+    Why this exists. The discriminator is the VaR/ES estimator: the generator's loss
+    is S(D(fake), real PNL), so it only carries signal once D reads the tail off a
+    sorted P&L vector correctly. Its own objective is real_score - fake_score, which
+    it can lower by inflating fake_score instead of becoming accurate, and at
+    lr_D <= 1e-5 that is what happens: D stays at its random init, and from a random
+    D the generator's loss falls monotonically in the generated volatility, telling
+    it to be more extreme without bound. Measured on our data: loss_G 8.43 at 0.2x
+    volatility down to 8.35 at 2x, against a floor of 2.11.
+
+    Warming D up on real data alone first turns that into a bowl whose minimum sits
+    at the real volatility (measured: argmin at 0.85x). Upstream Train_Single is left
+    untouched; this function mirrors it, saving generators and loss_id{m}.npy in the
+    same layout so screen_ensemble and select_ensemble keep working.
+    """
+    import time
+
+    import numpy as np
+    import torch
+    from torch.autograd import Variable
+
+    torch.manual_seed(seed)
+    Tensor = TG.Tensor
+    generator, discriminator, criterion = TG.Generator(), TG.Discriminator(), TG.Score()
+    if TG.cuda:
+        generator.cuda()
+        discriminator.cuda()
+
+    def noise(n):
+        if "t" in o.noise_name:
+            df = int(o.noise_name.split("t")[1])
+            return Variable(Tensor(np.random.standard_t(df, (n, o.latent_dim))))
+        return Variable(Tensor(np.random.normal(0, 1, (n, o.latent_dim))))
+
+    def emp_floor(PNL):
+        """Score at the empirical (VaR, ES) of the real P&L: the best G can reach."""
+        X = PNL.T.detach()
+        total = 0.0
+        for alpha in o.alphas:
+            v = torch.quantile(X, alpha, dim=1, keepdim=True)
+            e = torch.stack([x[x <= vt].mean() for x, vt in zip(X, v)]).reshape(-1, 1)
+            total += TG.S_quant(v, e, X, alpha).item()
+        return total
+
+    # ---- phase 1: D alone on real data, so it starts as a working VaR/ES estimator
+    start_time = time.time()
+    warm_opt = torch.optim.Adam(discriminator.parameters(), lr=warmup_lr,
+                                betas=(o.b1, o.b2))
+    it = iter(dataloader)
+    for step in range(warmup_steps):
+        try:
+            R = next(it)
+        except StopIteration:
+            it = iter(dataloader)
+            R = next(it)
+        PNL, validity = discriminator(Variable(R.type(Tensor)))
+        loss = criterion(validity, PNL)
+        warm_opt.zero_grad()
+        loss.backward()
+        warm_opt.step()
+        if step % 100 == 0 or step == warmup_steps - 1:
+            fl = emp_floor(PNL)
+            print(f"[warmup {step:4d}] D score={loss.item():8.4f}  floor={fl:8.4f}  "
+                  f"gap={loss.item() - fl:+8.4f}")
+
+    # fresh Adam moments for the adversarial phase, D already accurate
+    optimizer_G = torch.optim.Adam(generator.parameters(), lr=o.lr_G, betas=(o.b1, o.b2))
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=o.lr_D, betas=(o.b1, o.b2))
+
+    # ---- phase 2: adversarial, same updates as upstream Train_Single
+    loss_d_l, loss_g_l, diag_l = [], [], []
+    for epoch in range(o.n_epochs):
+        ep_d, ep_g, ep_real, ep_floor = [], [], [], []
+
+        for i, R in enumerate(dataloader):
+            real_R = Variable(R.type(Tensor))
+            gen_R = generator(noise(R.shape[0]))
+
+            if i % o.n_critic_D == 0:
+                optimizer_D.zero_grad()
+                PNL, PNL_validity = discriminator(real_R)
+                gen_PNL, gen_PNL_validity = discriminator(gen_R)
+                real_score = criterion(PNL_validity, PNL)
+                fake_score = criterion(gen_PNL_validity, PNL)
+                loss_D = real_score - fake_score
+                loss_D.backward(retain_graph=True)
+                optimizer_D.step()
+                ep_d.append(loss_D.item())
+                ep_real.append(real_score.item())
+                ep_floor.append(emp_floor(PNL))
+
+            if i % o.n_critic_G == 0:
+                optimizer_G.zero_grad()
+                gen_PNL, gen_PNL_validity = discriminator(gen_R)
+                loss_G = criterion(gen_PNL_validity, PNL)
+                loss_G.backward()
+                optimizer_G.step()
+                ep_g.append(loss_G.item())
+
+        loss_d_l.append(np.mean(ep_d))
+        loss_g_l.append(np.mean(ep_g))
+        diag_l.append([np.mean(ep_real), np.mean(ep_floor)])
+
+        if epoch % 100 == 0 or epoch == o.n_epochs - 1:
+            # real_score - floor is D's accuracy; loss_G - floor is how far G still is
+            r, f = diag_l[-1]
+            with torch.no_grad():
+                smp = generator(noise(500))
+            std = smp.std(dim=(0, 2)).cpu().numpy()
+            print(f"[Epoch {epoch}] [D loss: {loss_d_l[-1]: .4f}] "
+                  f"[G loss: {loss_g_l[-1]:.4f}] [floor: {f:.4f}] "
+                  f"[D err: {r - f:+.4f}] [G gap: {loss_g_l[-1] - f:+.4f}] "
+                  f"[gen std: {np.round(std, 4)}] "
+                  f"--- {int(time.time() - start_time)}s ---")
+
+        if epoch % 100 == 0:
+            torch.save(discriminator.state_dict(),
+                       join(TG.model_path, "discriminator_id%d_E%d" % (model_index, epoch)))
+            torch.save(generator.state_dict(),
+                       join(TG.model_path, "generator_id%d_E%d" % (model_index, epoch)))
+
+    np.save(join(TG.gen_data_path, "loss_id%d.npy" % model_index),
+            np.stack([np.array(loss_d_l), np.array(loss_g_l)]))
+    np.save(join(TG.gen_data_path, "diag_id%d.npy" % model_index),
+            np.array(diag_l).T)      # rows = [real_score, empirical floor]
+
+
 def ask_plan(args):
     """Resolve (do_train, n_sets) from CLI flags, else interactive prompts."""
     if args.train:
@@ -319,6 +485,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--epochs", type=int, default=int(os.environ.get("TG_EPOCHS", "20000")))
     ap.add_argument("--batch", type=int, default=None, help="batch size (default: TailGAN default)")
+    ap.add_argument("--lr-g", type=float, default=None,
+                    help="generator lr (default: TailGAN's own 1e-6)")
+    ap.add_argument("--lr-d", type=float, default=None,
+                    help="discriminator lr (default: TailGAN's own 1e-7)")
+    ap.add_argument("--d-warmup", type=int, default=400,
+                    help="adversarial 학습 전 D 단독 warmup step 수 (0이면 원본 그대로)")
+    ap.add_argument("--lr-d-warmup", type=float, default=1e-3,
+                    help="D warmup 단계의 lr (measured: 1e-3에서 100 step 내 floor 도달)")
     ap.add_argument("--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)")
     ap.add_argument("--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만")
     ap.add_argument("--sets", type=int, default=None, help="생성할 2000개 묶음 수 (미지정 시 질문)")
@@ -329,7 +503,9 @@ def main():
     ap.add_argument("--select", type=str, default="vares", choices=["vares", "last", "emd"],
                     help="모델별 epoch 선정: 'vares'=VaR/ES 상대오차 최소(원논문 기본), 'last'=마지막, 'emd'=train 최소 EMD")
     ap.add_argument("--ensemble", type=int, default=10, help="앙상블 모델 수 numNN (원논문 기본 10; 1이면 단일)")
-    ap.add_argument("--screen-pct", type=int, default=50, help="수렴 스크리닝 백분위 (최종 G-loss 이하 생존)")
+    ap.add_argument("--screen-pct", type=int, default=50, help="수렴 스크리닝 백분위 (이하 생존)")
+    ap.add_argument("--screen-by", type=str, default="min", choices=["min", "final"],
+                    help="스크리닝에 쓸 G-loss: 'min'=모델별 최저(기본), 'final'=마지막 (원논문)")
     args = ap.parse_args()
 
     do_train, n_sets = ask_plan(args)
@@ -345,10 +521,7 @@ def main():
 
         # ---- static-portfolio matrices + path injection (training only) ----
         import gen_static_port as gsp
-        gsp.your_path = YOUR_PATH
-        gsp.trans_parent_data_path = join(YOUR_PATH, "Static_Port_Transform")
-        os.makedirs(gsp.trans_parent_data_path, exist_ok=True)
-        gsp.Gen_StaticPort("LShort", n_stocks=N_ROWS, n_ports=50)
+        ensure_static_basket(gsp)
 
         import gen_thresholds as gt
         gt.your_path = YOUR_PATH
@@ -368,6 +541,15 @@ def main():
         o.n_epochs = args.epochs
         if args.batch is not None:
             o.batch_size = args.batch
+        # sys.argv is reset above so TailGAN's argparse keeps its own defaults,
+        # lr_D=1e-7 and lr_G=1e-6. Those were tuned for the paper's synthetic demo
+        # (5 series, 100 steps, len=50000). Here len trims to 3000 with batch 1000,
+        # so an epoch is 3 steps and 3000 epochs is only 9000 generator updates:
+        # the generator barely moves. Allow the rates to be set explicitly.
+        if args.lr_g is not None:
+            o.lr_G = args.lr_g
+        if args.lr_d is not None:
+            o.lr_D = args.lr_d
         # DataLoader has no drop_last; trim len to a multiple of batch so the last
         # partial batch can't mismatch Discriminator(Linear(batch_size)).
         o.len = (n_windows // o.batch_size) * o.batch_size
@@ -377,7 +559,10 @@ def main():
         TG.model_path = join(YOUR_PATH, "Models", DATA_NAME)
         os.makedirs(TG.gen_data_path, exist_ok=True)
         os.makedirs(TG.model_path, exist_ok=True)
-        print(f"[run] R_shape={TG.R_shape}, len={o.len}, n_epochs={o.n_epochs}, batch={o.batch_size}")
+        print(f"[run] R_shape={TG.R_shape}, len={o.len}, n_epochs={o.n_epochs}, "
+              f"batch={o.batch_size}, steps/epoch={o.len // o.batch_size}, "
+              f"lr_G={o.lr_G}, lr_D={o.lr_D}, "
+              f"d_warmup={args.d_warmup}@{args.lr_d_warmup:g}")
         shutil.rmtree(join(TG_DIR, "your_path"), ignore_errors=True)  # clean stray import-time dir
 
         # ---- keep every per-100-epoch generator under result/weight (for EMD selection) ----
@@ -412,13 +597,18 @@ def main():
         dataloader = _torch.utils.data.DataLoader(dataset, batch_size=o.batch_size, shuffle=True)
         for m in range(o.numNN):
             print(f"------ Model {m}/{o.numNN} (seed {base_seed + m}) ------")
-            TG.Train_Single(o, dataloader, model_index=m, seed=base_seed + m)
+            if args.d_warmup > 0:
+                train_single_warm(TG, o, dataloader, model_index=m, seed=base_seed + m,
+                                  warmup_steps=args.d_warmup, warmup_lr=args.lr_d_warmup)
+            else:
+                TG.Train_Single(o, dataloader, model_index=m, seed=base_seed + m)
         _np.save, _torch.save = _orig_np_save, _orig_torch_save
 
         # ---- original TailGAN ensemble: screen by convergence, pick each survivor's best epoch ----
         real_bct = train_windows_bct()
         best = select_ensemble(TG, real_bct, tmp_ckpt, args.select_samples, o.numNN,
-                               args.screen_pct, TG.gen_data_path, metric=args.select)
+                               args.screen_pct, TG.gen_data_path, metric=args.select,
+                               screen_by=args.screen_by)
         for fp in glob.glob(join(RESULT_DIR, "generator_best*.pt")):
             os.remove(fp)
         os.makedirs(RESULT_DIR, exist_ok=True)

@@ -18,12 +18,61 @@ RE_VaR/RE_ES metric is unchanged.
 """
 
 import os
+import shutil
 import sys
 from os.path import join
 
 import numpy as np
 
 DEFAULT_ALPHAS = (0.05, 0.025, 0.01)
+
+# The basket that every reported VaR/ES number is measured against, tracked in the
+# repository so a fresh clone reproduces the tables. See ensure_static_basket.
+REFERENCE_BASKET = join("data", "tailgan_basket")
+
+
+def ensure_static_basket(project_root, gsp, n_rows=6, n_ports=50,
+                         static_way="LShort", seed=0):
+    """Put the static portfolio matrix in place without ever redrawing it.
+
+    Those n_ports portfolios ARE the evaluation basket: 50 of Compute_PNL's 68
+    columns, so every relative error in the result tables is measured against
+    them. Gen_StaticPort draws them from an unseeded normal through the global
+    numpy state, and run.py used to call it on every --train. Redrawing rescores
+    every model at once, including models that were not retrained: on 2026-07-28
+    a redraw moved QuantGAN's RE_VaR(0.05) from 0.5340 to 0.4468 and
+    Diffusion-TS's from 0.5684 to 0.6333 from byte identical samples. The two
+    tables were not comparable and neither was reproducible.
+
+    A seed alone does not fix this, because data/TailGAN is not in the repository,
+    so a fresh clone would draw its own basket, and because scipy.sparse.random
+    and stats.norm.rvs are not guaranteed stable across scipy versions. The basket
+    is therefore checked in under data/tailgan_basket and copied into place here.
+
+    Order of preference: an existing working copy, then the tracked reference,
+    then a seeded draw as a last resort. To move to a new basket deliberately,
+    replace the tracked reference and expect every number to change.
+    """
+    live_dir = join(project_root, "data", "TailGAN", "Static_Port_Transform",
+                    f"{static_way}_Stk{n_rows}")
+    ref_dir = join(project_root, REFERENCE_BASKET, f"{static_way}_Stk{n_rows}")
+    live = join(live_dir, "TransMat_IS.npy")
+    if os.path.exists(live):
+        return live
+    if os.path.exists(join(ref_dir, "TransMat_IS.npy")):
+        os.makedirs(live_dir, exist_ok=True)
+        for f in ("TransMat_IS.npy", "TransMat_OOS.npy"):
+            src = join(ref_dir, f)
+            if os.path.exists(src):
+                shutil.copyfile(src, join(live_dir, f))
+        print(f"[basket] restored from the tracked reference: {ref_dir}")
+        return live
+    np.random.seed(seed)                     # Gen_StaticPort draws from this state
+    gsp.Gen_StaticPort(static_way, n_stocks=n_rows, n_ports=n_ports)
+    print(f"[basket] no tracked reference found, drew a new basket with seed "
+          f"{seed}. Every number in the tables will differ from the reported "
+          f"ones; copy this matrix to {ref_dir} to freeze it.")
+    return live
 
 
 def empirical_var_es(pnl, alpha):
@@ -106,10 +155,9 @@ def configure_from_project(project_root, data_name="indices2_6d",
         o.alphas = list(alphas)
         TG.R_shape = (n_rows, n_cols)
 
-        # ensure static-portfolio transition matrix exists
-        tm = join(YOUR_PATH, "Static_Port_Transform", f"{static_way}_Stk{n_rows}", "TransMat_IS.npy")
-        if not os.path.exists(tm):
-            gsp.Gen_StaticPort(static_way, n_stocks=n_rows, n_ports=n_trans)
+        # put the evaluation basket in place from the tracked reference
+        ensure_static_basket(project_root, gsp, n_rows=n_rows, n_ports=n_trans,
+                             static_way=static_way)
         return TG
     finally:
         os.chdir(_cwd)
