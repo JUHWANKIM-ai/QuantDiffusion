@@ -958,3 +958,40 @@ def check_attention_position_sensitivity(
         "position_sensitive": position_sensitive,
         "out_shape": tuple(out.shape),
     }
+
+
+def log_rv_channel(a, window=10, eps=1e-8):
+    """(B, C, T) returns -> (B, C, T - window) log realized variance per asset.
+
+    This is the x_t = log RV_t channel of the decomposition, formed the same way
+    here as in the model pipeline so the metric tests the component the network
+    actually generates rather than a derived quantity.
+    """
+    a = np.atleast_3d(np.asarray(a, dtype=np.float64))
+    c = np.cumsum(a ** 2, axis=-1)
+    return np.log((c[..., window:] - c[..., :-window]) / window + eps)
+
+
+def calculate_vol_ccf(real, fake, window=10, max_lag=0):
+    """Cross asset dependence of the volatility channel, as a CCF on log RV.
+
+    Identical machinery to calculate_ccf, applied to x_t instead of r_t, so the
+    row reads next to the return CCF rows on the same scale: the correlation
+    matrix is formed inside each scenario, averaged over scenarios, and compared
+    to the real one entry by entry.
+
+    Volatility moves together across markets, and a generator can reproduce each
+    asset's own clustering while getting the joint behaviour wrong, which no per
+    series metric detects. That is what this measures. Taking the error entry by
+    entry rather than on the averaged level matters because the real pairs are
+    far from uniform, from 0.16 for Hang Seng against gold to 0.74 for the two
+    equity indices, so a generator that emits one flat level would score well on
+    a level comparison and badly here.
+
+    real: (B_r, C, T), fake: (B_f, C, T)
+    """
+    df = calculate_ccf(log_rv_channel(real, window),
+                       log_rv_channel(fake, window), max_lag)
+    df.index = [f"Vol {i}" for i in df.index]
+    df.index.name = "Metric"
+    return df

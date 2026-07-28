@@ -67,7 +67,7 @@ Synthetic returns  r̂ ∈ R^{n×T}
 Real daily returns for six assets (DJIA, Nasdaq, JP Morgan, Hang Seng, Gold, WTI crude), 2001–2025, evaluated
 against **QuantGAN, Tail-GAN, and Diffusion-TS**.
 
-![Relative error of portfolio Value at Risk and Expected Shortfall, against the baselines and across the ablation variants. Each axis is scaled so that further from the centre is better.](result/images/figures/fig3_risk_radars.png)
+![Relative error of portfolio Value at Risk and Expected Shortfall, against the baselines and across the ablation variants. Each axis is scaled so that further from the centre is better.](result/images/fig3_risk_radars.png)
 
 Best in **bold**, second best in *italic*; lower is better. Every number below is read straight out of
 `result/statistics/*.csv`, which the notebooks regenerate.
@@ -78,6 +78,7 @@ Best in **bold**, second best in *italic*; lower is better. Every number below i
 |---|---|---|---|---|
 | CCF(τ=0) | 0.0968 | 0.1822 | **0.0533** | *0.0572* |
 | CCF(τ>0) | 0.0569 | 0.0798 | *0.0367* | **0.0341** |
+| Vol CCF(τ=0) | 0.1409 | 0.3072 | **0.0631** | *0.0818* |
 | KS(1) | *0.0402* | 0.1482 | 0.0948 | **0.0375** |
 | KS(5) | *0.0529* | 0.1195 | 0.1141 | **0.0418** |
 | KS(20) | *0.0785* | 0.1620 | 0.1335 | **0.0530** |
@@ -106,7 +107,7 @@ Best in **bold**, second best in *italic*; lower is better. Every number below i
 | RE ES(0.025) | 0.5693 | *0.3895* | 0.4670 | **0.3455** |
 | RE ES(0.01) | 0.6627 | *0.3752* | 0.4168 | **0.3533** |
 
-QuantDiffusion is best on 12 of 18 fidelity metrics and top-2 on 16, and it attains the smallest VaR/ES error
+QuantDiffusion is best on 12 of 19 fidelity metrics and top-2 on 17, and it attains the smallest VaR/ES error
 at every confidence level, staying nearly flat rather than degrading deeper into the tail.
 
 Tail-GAN is the informative comparison. Its quantile based adversarial objective makes it the second best model
@@ -125,6 +126,7 @@ Removing one component at a time (best in **bold**, second best *italic*; lower 
 |---|---|---|---|---|
 | CCF(τ=0)  | 0.0572 | *0.0524* | 0.0709 | **0.0390** |
 | CCF(τ>0)  | *0.0341* | 0.0342 | 0.0420 | **0.0276** |
+| Vol CCF(τ=0) | *0.0818* | 0.1432 | 0.1151 | **0.0568** |
 | KS(1)     | 0.0375 | **0.0328** | 0.0379 | *0.0342* |
 | KS(5)     | **0.0418** | 0.0446 | 0.0437 | *0.0424* |
 | KS(20)    | **0.0530** | 0.0647 | *0.0622* | 0.0660 |
@@ -229,18 +231,19 @@ restored from `data/tailgan_basket/`. No separate step is required.
 **5. Figures & data check.** `3_visualization.ipynb` saves ACF / correlation / histogram figures to
 `result/images/` and cross-checks the CRSP dataset against yfinance.
 
-The five figures the paper uses are separate, built by `result/images/figures/make_paper_figures.py`, sized for
-`acmart` sigconf (3.33 in for one column, 7.0 in across both) at 400 dpi:
+The five figures the paper uses are separate, built by `utils/make_paper_figures.py` straight into
+`result/images/`, sized for `acmart` sigconf (3.33 in for one column, 7.0 in across both) at 400 dpi. Section
+3-1 of `3_visualization.ipynb` calls the same builders, one cell per figure, so the notebook and the pdf cannot
+show different plots.
 
 ```bash
-cd result/images/figures
-python make_paper_figures.py          # all five
-python make_paper_figures.py 2 4      # only fig2 and fig4
+python utils/make_paper_figures.py          # all five
+python utils/make_paper_figures.py 2 4      # only fig2 and fig4
 ```
 
 | File | Content |
 |---|---|
-| `fig1_stylized_facts.png` | ACF of \|r\| and r², and cross asset comovement of the volatility channel |
+| `fig1_stylized_facts.png` | ACF of \|r\| and r², and the distribution of cross asset comovement of the volatility channel over scenarios |
 | `fig2_distribution.png` | five day cumulative log return distributions for JP Morgan |
 | `fig3_risk_radars.png` | VaR/ES relative error, baselines and ablation |
 | `fig4_risk_horizon.png` | VaR/ES error at every horizon from 20 to 255 trading days |
@@ -248,8 +251,9 @@ python make_paper_figures.py 2 4      # only fig2 and fig4
 
 `fig4` needs Tail-GAN's `Compute_PNL`, which corrupts the heap on CPU: the P&L values come out correct, then the
 process dies at whatever allocates next. Each horizon is therefore computed in a subprocess that writes its
-result and leaves through `os._exit`, cached under `pnl_cache/`, which is safe to delete and is what makes a
-restyle take one second instead of two minutes. Set `CUDA_VISIBLE_DEVICES=-1` to keep it off a busy GPU.
+result and leaves through `os._exit`, cached under `result/images/pnl_cache/`, which is safe to delete and is
+what makes a restyle take one second instead of two minutes. Set `CUDA_VISIBLE_DEVICES=-1` to keep it off a busy
+GPU.
 
 **6. Noise schedule (optional).** `ANT_score.ipynb` scores noise schedules with the ANT criterion; this is how
 the cosine schedule was selected.
@@ -276,8 +280,10 @@ quantDiffusion/
 │                            #   TailGAN/ (auto-built by the notebooks)
 └── result/
     ├── statistics/          # synthetic_data/<tag>/*.npy, *.csv
-    └── images/figures/      # the five paper figures + make_paper_figures.py
+    └── images/              # the five paper figures, drawio/ sources, pnl_cache/
 ```
+
+`result/images/` is not tracked: the figures are rebuilt by `utils/make_paper_figures.py` or by notebook 3.
 
 Summary CSVs are grouped by prefix: `individual__<tag>__gen_quality.csv` (per model),
 `ablation__*.csv`, and `benchmark__*.csv`.
