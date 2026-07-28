@@ -4,3 +4,5 @@
 scratch/
 data/TailGAN/
 modules/diffusionTS/Data
+result/images/drawio
+result/images/figures

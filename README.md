@@ -7,9 +7,9 @@ Generation for Portfolio Risk Assessment via Realized Volatility Decomposition**
 
 ## Our Paper
 
-Juhwan Kim, Soobeen Kim, and JaeWook Song. *QuantDiffusion: Multivariate Financial Scenario Generation for
-Portfolio Risk Assessment via Realized Volatility Decomposition.* In the 7th ACM International Conference on
-AI in Finance (ICAIF), 2026.
+*QuantDiffusion: Multivariate Financial Scenario Generation for Portfolio Risk Assessment via Realized
+Volatility Decomposition.* In the 7th ACM International Conference on AI in Finance (ICAIF), 2026.
+Author list withheld for review.
 
 We study how to make **denoising diffusion models** generate realistic multivariate financial return
 scenarios for risk-sensitive tasks (stress testing, deep hedging, Value-at-Risk / Expected Shortfall
@@ -238,7 +238,7 @@ Summary CSVs are grouped by prefix: `individual__<tag>__gen_quality.csv` (per mo
 @inproceedings{kim2026quantdiffusion,
   title     = {QuantDiffusion: Multivariate Financial Scenario Generation for
                Portfolio Risk Assessment via Realized Volatility Decomposition},
-  author    = {Kim, Juhwan and Kim, Soobeen and Song, JaeWook},
+  author    = {Anonymous},
   booktitle = {Proceedings of the 7th ACM International Conference on AI in Finance (ICAIF)},
   year      = {2026},
 }
