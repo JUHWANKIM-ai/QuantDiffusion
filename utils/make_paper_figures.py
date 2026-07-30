@@ -50,9 +50,23 @@ HELPERS = os.path.join(PROJECT, "result", "images", "figures")
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
-from utils.make_figures import (ABL, ASSETS, C, DPI, EPS, MODELS, ROOT,  # noqa: E402
-                          RV_WINDOW, ST, acf_batch, flat_windows, load_model,
-                          load_real, read_pm_table, tag)
+from utils.make_figures import (
+    ABL,
+    ASSETS,
+    C,
+    DPI,
+    EPS,
+    MODELS,
+    ROOT,  # noqa: E402
+    RV_WINDOW,
+    ST,
+    acf_batch,
+    flat_windows,
+    load_model,
+    load_real,
+    read_pm_table,
+    tag,
+)
 from utils.make_square_figures import COL_ABL, COL_BENCH, RISK, radar  # noqa: E402
 
 # the figures land directly under result/images
@@ -62,23 +76,25 @@ OUT = os.path.join(PROJECT, "result", "images")
 # have no business being tracked next to the figures they produce.
 CACHE = os.path.join(HELPERS, "pnl_cache")
 os.makedirs(OUT, exist_ok=True)
-FULL, COL = 7.0, 3.33          # acmart sigconf: both columns, one column
+FULL, COL = 7.0, 3.33  # acmart sigconf: both columns, one column
 HS = [20, 40, 64, 96, 128, 160, 200, 256]
 ALPHA = 0.05
-N_WIN = 400                    # scenarios per model where a subset suffices
+N_WIN = 400  # scenarios per model where a subset suffices
 
 # Times New Roman everywhere, with a serif math face to match it
-plt.rcParams.update({
-    "font.family": "serif",
-    "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
-    "mathtext.fontset": "stix",
-    "font.size": 7.6,
-    "axes.labelsize": 7.6,
-    "axes.titlesize": 8.2,
-    "legend.fontsize": 6.8,
-    "xtick.labelsize": 6.8,
-    "ytick.labelsize": 6.8,
-})
+plt.rcParams.update(
+    {
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
+        "mathtext.fontset": "stix",
+        "font.size": 7.6,
+        "axes.labelsize": 7.6,
+        "axes.titlesize": 8.2,
+        "legend.fontsize": 6.8,
+        "xtick.labelsize": 6.8,
+        "ytick.labelsize": 6.8,
+    }
+)
 
 
 def save(fig, name, outdir=OUT):
@@ -93,8 +109,12 @@ def save(fig, name, outdir=OUT):
 ORDER = ["QuantGAN", "TailGAN", "Diffusion-TS", "QuantDiffusion"]
 # the keys are the folder names; the paper spells the model Tail-GAN
 DISPLAY = {"TailGAN": "Tail-GAN"}
-SHORT = {"QuantGAN": "QuantGAN", "TailGAN": "Tail-GAN",
-         "Diffusion-TS": "Diffusion-TS", "QuantDiffusion": "ours"}
+SHORT = {
+    "QuantGAN": "QuantGAN",
+    "TailGAN": "Tail-GAN",
+    "Diffusion-TS": "Diffusion-TS",
+    "QuantDiffusion": "ours",
+}
 
 
 def relabel(ax, reverse=False, **kw):
@@ -115,7 +135,7 @@ def order_models():
 # ==========================================================================
 def log_rv(A, w=RV_WINDOW):
     """x_t = log RV_t per asset, the second half of the diffusion representation."""
-    c = np.cumsum(A ** 2, axis=-1)
+    c = np.cumsum(A**2, axis=-1)
     rv = (c[..., w:] - c[..., :-w]) / w
     return np.log(rv + EPS)
 
@@ -173,23 +193,36 @@ def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
     # makes that fit: (a) and (b) share the y axis, the lag axis carries three
     # ticks, and (c) carries no category labels because every curve is coloured
     # by model and the legend above already maps colour to model.
-    fig, axes = plt.subplots(1, 3, figsize=(COL, 1.62), sharey=False,
-                             gridspec_kw={"width_ratios": [1, 1, 0.86]})
-    fig.subplots_adjust(left=0.125, right=0.99, top=0.755, bottom=0.235,
-                        wspace=0.30)
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(COL, 1.62),
+        sharey=False,
+        gridspec_kw={"width_ratios": [1, 1, 0.86]},
+    )
+    fig.subplots_adjust(left=0.125, right=0.99, top=0.755, bottom=0.235, wspace=0.30)
 
     panels = [
-        (r"ACF$(|r_\tau|)$", lambda A: acf_batch(np.abs(flat_windows(A, N_WIN)),
-                                                 nlags).mean(0)),
-        (r"ACF$(r_\tau^2)$", lambda A: acf_batch(flat_windows(A, N_WIN) ** 2,
-                                                 nlags).mean(0)),
+        (
+            r"ACF$(|r_\tau|)$",
+            lambda A: acf_batch(np.abs(flat_windows(A, N_WIN)), nlags).mean(0),
+        ),
+        (
+            r"ACF$(r_\tau^2)$",
+            lambda A: acf_batch(flat_windows(A, N_WIN) ** 2, nlags).mean(0),
+        ),
     ]
     for ax, (title, fn), letter in zip(axes, panels, "ab"):
         for k, A in series.items():
-            ax.plot(np.arange(1, nlags + 1), fn(A), color=C[k],
-                    lw=1.1 if k == "Real" else 0.75,
-                    ls="-" if k == "Real" else "--",
-                    label=k if letter == "a" else None, zorder=3)
+            ax.plot(
+                np.arange(1, nlags + 1),
+                fn(A),
+                color=C[k],
+                lw=1.1 if k == "Real" else 0.75,
+                ls="-" if k == "Real" else "--",
+                label=k if letter == "a" else None,
+                zorder=3,
+            )
         ax.set_title(title, pad=2.0, fontsize=6.4)
         ax.set_xlabel(r"lag $\tau$", fontsize=5.8, labelpad=0.8)
         ax.set_xticks([0, 20, 40])
@@ -207,9 +240,17 @@ def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
     # spread be read off.
     m = {}
     for k, A in series.items():
-        m[k] = comovement_windows(A) if k == "Real" else np.concatenate(
-            [comovement_windows(load_model(MODELS[k], r)) for r in range(5)
-             if load_model(MODELS[k], r) is not None])
+        m[k] = (
+            comovement_windows(A)
+            if k == "Real"
+            else np.concatenate(
+                [
+                    comovement_windows(load_model(MODELS[k], r))
+                    for r in range(5)
+                    if load_model(MODELS[k], r) is not None
+                ]
+            )
+        )
 
     if panel_c == "risk_cdf":
         # RISK view: equal-weight portfolio cumulative log return per scenario (pooled
@@ -222,13 +263,19 @@ def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
                 rc[k] = series[k].mean(axis=1).sum(axis=1)
             else:
                 sets = [load_model(MODELS[k], r) for r in range(5)]
-                rc[k] = np.concatenate([s.mean(axis=1).sum(axis=1)
-                                        for s in sets if s is not None])
+                rc[k] = np.concatenate(
+                    [s.mean(axis=1).sum(axis=1) for s in sets if s is not None]
+                )
         grid = np.linspace(0.002, 0.998, 400)
         for k in series:
-            ax.plot(np.quantile(rc[k], grid), grid, color=C[k],
-                    lw=1.1 if k == "Real" else 0.75,
-                    ls="-" if k == "Real" else "--", zorder=3)
+            ax.plot(
+                np.quantile(rc[k], grid),
+                grid,
+                color=C[k],
+                lw=1.1 if k == "Real" else 0.75,
+                ls="-" if k == "Real" else "--",
+                zorder=3,
+            )
         ax.set_yscale("log")
         ax.set_ylim(2e-3, 1)
         ax.set_yticks([1e-2, 1e-1, 1])
@@ -253,8 +300,13 @@ def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
                 xy = (q, -np.log10(1.0 - grid + 1e-12))
             else:
                 xy = (1.0 - grid, q)
-            ax.plot(*xy, color=C[k], lw=1.1 if k == "Real" else 0.75,
-                    ls="-" if k == "Real" else "--", zorder=3)
+            ax.plot(
+                *xy,
+                color=C[k],
+                lw=1.1 if k == "Real" else 0.75,
+                ls="-" if k == "Real" else "--",
+                zorder=3,
+            )
         if panel_c == "cdf":
             ax.set_xlim(-0.12, 0.88)
             ax.set_xticks([0.0, 0.4, 0.8])
@@ -292,27 +344,60 @@ def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
             ax.set_ylabel("comovement", fontsize=5.8, labelpad=1.2)
             # names the channel being correlated, since x_t is defined far from
             # this panel and the reader should not have to hunt for it
-            ax.text(0.97, 0.03, r"$x_t = \log RV_t$", transform=ax.transAxes,
-                    fontsize=5.0, va="bottom", ha="right", color="#444444")
+            ax.text(
+                0.97,
+                0.03,
+                r"$x_t = \log RV_t$",
+                transform=ax.transAxes,
+                fontsize=5.0,
+                va="bottom",
+                ha="right",
+                color="#444444",
+            )
     else:
         ms = [k for k in series if k != "Real"]
-        ax.bar(range(len(ms)), [m[k].mean() for k in ms], 0.66,
-               color=[C[k] for k in ms], lw=0, zorder=3)
-        ax.plot(range(len(ms)), [np.quantile(m[k], 0.95) for k in ms], "D",
-                ms=2.2, mfc="white", mew=0.7, mec=C["Real"], ls="none", zorder=5)
+        ax.bar(
+            range(len(ms)),
+            [m[k].mean() for k in ms],
+            0.66,
+            color=[C[k] for k in ms],
+            lw=0,
+            zorder=3,
+        )
+        ax.plot(
+            range(len(ms)),
+            [np.quantile(m[k], 0.95) for k in ms],
+            "D",
+            ms=2.2,
+            mfc="white",
+            mew=0.7,
+            mec=C["Real"],
+            ls="none",
+            zorder=5,
+        )
         rm, rq = m["Real"].mean(), np.quantile(m["Real"], 0.95)
         ax.axhline(rm, lw=0.9, color=C["Real"], zorder=4)
         ax.axhline(rq, lw=0.9, ls=(0, (2, 1.4)), color=C["Real"], zorder=4)
         for y, t in [(rm, "mean"), (rq, "q95")]:
-            ax.text(len(ms) - 0.45, y, t, fontsize=4.4, va="bottom", ha="right",
-                    color=C["Real"])
-        ax.set_xticks([])                 # the bar colours carry the identity
+            ax.text(
+                len(ms) - 0.45,
+                y,
+                t,
+                fontsize=4.4,
+                va="bottom",
+                ha="right",
+                color=C["Real"],
+            )
+        ax.set_xticks([])  # the bar colours carry the identity
         ax.set_xlim(-0.7, len(ms) - 0.3)
         ax.set_ylim(0, 0.88)
         ax.set_yticks([0.0, 0.4, 0.8])
         ax.set_xlabel("comovement", fontsize=5.8, labelpad=0.8)
-    ax.set_title("Risk CDF" if panel_c == "risk_cdf" else r"Corr$(x_i, x_j)$",
-                 pad=2.0, fontsize=6.4)
+    ax.set_title(
+        "Risk CDF" if panel_c == "risk_cdf" else r"Corr$(x_i, x_j)$",
+        pad=2.0,
+        fontsize=6.4,
+    )
     ax.tick_params(labelsize=5.4, pad=1.2)
     ax.grid(axis="y")
     ax.set_axisbelow(True)
@@ -322,11 +407,24 @@ def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
     # rather than to axes[0], which is only a third of the width here, so that it
     # centres over all three panels.
     h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, [DISPLAY.get(x, x) for x in l], ncol=5, loc="upper center",
-               bbox_to_anchor=(0.5, 1.0), frameon=True, fancybox=False,
-               edgecolor="#8A8A8A", facecolor="white", framealpha=1.0,
-               fontsize=4.8, handlelength=1.0, handletextpad=0.3,
-               columnspacing=0.6, borderpad=0.28, borderaxespad=0.0)
+    fig.legend(
+        h,
+        [DISPLAY.get(x, x) for x in l],
+        ncol=5,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.0),
+        frameon=True,
+        fancybox=False,
+        edgecolor="#8A8A8A",
+        facecolor="white",
+        framealpha=1.0,
+        fontsize=4.8,
+        handlelength=1.0,
+        handletextpad=0.3,
+        columnspacing=0.6,
+        borderpad=0.28,
+        borderaxespad=0.0,
+    )
     save(fig, name, outdir)
 
 
@@ -361,17 +459,35 @@ def fig2(asset=2, h=5):
 
     # two by two so the four panels fit one column instead of the text width
     fig, axes = plt.subplots(2, 2, figsize=(COL, 2.95), sharex=True)
-    fig.subplots_adjust(left=0.115, right=0.985, top=0.915, bottom=0.135,
-                        wspace=0.30, hspace=0.40)
+    fig.subplots_adjust(
+        left=0.115, right=0.985, top=0.915, bottom=0.135, wspace=0.30, hspace=0.40
+    )
     flat = axes.ravel()
     for k, (ax, m) in enumerate(zip(flat, order)):
         syn = cum_h(load_model(MODELS[m]), asset, h)
-        ax.hist(hist, bins=bins, density=True, color=HIST_FC, alpha=0.62,
-                edgecolor=HIST_EC, lw=0.2, label="Historical", zorder=2)
-        ax.hist(syn, bins=bins, density=True, color=SYN_FC, alpha=0.62,
-                edgecolor=SYN_EC, lw=0.2, label="Synthetic", zorder=3)
-        ax.set_title(DISPLAY.get(m, m), pad=2.5, fontsize=7.0,
-                     fontweight="bold")
+        ax.hist(
+            hist,
+            bins=bins,
+            density=True,
+            color=HIST_FC,
+            alpha=0.62,
+            edgecolor=HIST_EC,
+            lw=0.2,
+            label="Historical",
+            zorder=2,
+        )
+        ax.hist(
+            syn,
+            bins=bins,
+            density=True,
+            color=SYN_FC,
+            alpha=0.62,
+            edgecolor=SYN_EC,
+            lw=0.2,
+            label="Synthetic",
+            zorder=3,
+        )
+        ax.set_title(DISPLAY.get(m, m), pad=2.5, fontsize=7.0, fontweight="bold")
         ax.xaxis.set_major_locator(MaxNLocator(4))
         ax.yaxis.set_major_locator(MaxNLocator(4))
         ax.tick_params(labelsize=5.8)
@@ -380,10 +496,17 @@ def fig2(asset=2, h=5):
         if k % 2 == 0:
             ax.set_ylabel("Density", fontsize=6.6, labelpad=1.5)
         if k >= 2:
-            ax.set_xlabel(f"Cumulative log return ({h} Day)", fontsize=6.6,
-                          labelpad=1.5)
-    flat[0].legend(loc="upper left", fontsize=5.4, handlelength=0.9,
-                   labelspacing=0.18, borderpad=0.18, handletextpad=0.4)
+            ax.set_xlabel(
+                f"Cumulative log return ({h} Day)", fontsize=6.6, labelpad=1.5
+            )
+    flat[0].legend(
+        loc="upper left",
+        fontsize=5.4,
+        handlelength=0.9,
+        labelspacing=0.18,
+        borderpad=0.18,
+        handletextpad=0.4,
+    )
     save(fig, "fig2_distribution.png")
 
 
@@ -398,29 +521,57 @@ def fig3():
     # floor on how small each radar can get, since point sizes do not shrink with
     # the figure, so the pair goes vertically rather than side by side.
     fig = plt.figure(figsize=(COL, 4.55))
-    for idx, (mean, cols, keys, title, letter) in enumerate([
+    for idx, (mean, cols, keys, title, letter) in enumerate(
+        [
             (bm, COL_BENCH, ORDER, "benchmark", "a"),
-            (ab, COL_ABL, ["w/o Lambert W", "w/o DMS-TCN", "w/o RV", "Full"], "ablation", "b")]):
-        present = {k: cols[k] for k in keys
-                   if k in cols and cols[k] in mean.columns}
-        vals = {m: {k: mean.loc[k, c] for k, _ in RISK}
-                for m, c in present.items()}
+            (
+                ab,
+                COL_ABL,
+                ["w/o Lambert W", "w/o DMS-TCN", "w/o RV", "Full"],
+                "ablation",
+                "b",
+            ),
+        ]
+    ):
+        present = {k: cols[k] for k in keys if k in cols and cols[k] in mean.columns}
+        vals = {m: {k: mean.loc[k, c] for k, _ in RISK} for m, c in present.items()}
         ax = fig.add_subplot(2, 1, idx + 1, projection="polar")
         radar(ax, RISK, vals, list(present), fmt="{:.3f}", note=False, gamma=0.55)
-        ax.set_ylim(0, 1.17)           # tighter than the default outer margin
+        ax.set_ylim(0, 1.17)  # tighter than the default outer margin
         for t in ax.get_xticklabels():
             t.set_fontsize(6.0)
-        relabel(ax, reverse=True, loc="upper left", bbox_to_anchor=(-0.24, 1.12),
-                fontsize=5.6, handlelength=0.9, labelspacing=0.2,
-                handletextpad=0.4)
-        ax.text(-0.26, 1.10, f"({letter})", transform=ax.transAxes,
-                fontsize=7.6, fontweight="bold", va="bottom", ha="left")
-        ax.text(1.06, 1.10, title, transform=ax.transAxes, fontsize=7.4,
-                va="bottom", ha="right")
+        relabel(
+            ax,
+            reverse=True,
+            loc="upper left",
+            bbox_to_anchor=(-0.24, 1.12),
+            fontsize=5.6,
+            handlelength=0.9,
+            labelspacing=0.2,
+            handletextpad=0.4,
+        )
+        ax.text(
+            -0.26,
+            1.10,
+            f"({letter})",
+            transform=ax.transAxes,
+            fontsize=7.6,
+            fontweight="bold",
+            va="bottom",
+            ha="left",
+        )
+        ax.text(
+            1.06,
+            1.10,
+            title,
+            transform=ax.transAxes,
+            fontsize=7.4,
+            va="bottom",
+            ha="right",
+        )
     # no footnote inside the figure: "further from the centre is better" belongs
     # in the caption, and at this size it would land on the ES_0.01 labels
-    fig.subplots_adjust(left=0.10, right=0.90, top=0.925, bottom=0.025,
-                        hspace=0.34)
+    fig.subplots_adjust(left=0.10, right=0.90, top=0.925, bottom=0.025, hspace=0.34)
     save(fig, "fig3_risk_radars.png")
 
 
@@ -429,16 +580,26 @@ def fig3():
 # ==========================================================================
 # fig4 must equal Table portfolio_risk at its terminal horizon, so it is computed
 # on the same five tracked OOS baskets (data/tailgan_basket) and five seeds.
-_FIG_LIVE_IS = os.path.join(PROJECT, "data", "TailGAN", "Static_Port_Transform",
-                            "LShort_Stk6", "TransMat_IS.npy")
+_FIG_LIVE_IS = os.path.join(
+    PROJECT,
+    "data",
+    "TailGAN",
+    "Static_Port_Transform",
+    "LShort_Stk6",
+    "TransMat_IS.npy",
+)
 _FIG_BASKET_DIR = os.path.join(PROJECT, "data", "tailgan_basket")
 N_BASKETS = 5
 N_SEEDS = 5
 # the 68 Compute_PNL columns in order: BuyHold[0:6], static portfolios[6:56],
 # mean reversion[56:62], trend following[62:68]. "all" is what fig4 reports;
 # the three named strategies are the columns of fig6.
-_STRATS = {"all": slice(None), "Port": slice(6, 56),
-           "MR": slice(56, 62), "TF": slice(62, 68)}
+_STRATS = {
+    "all": slice(None),
+    "Port": slice(6, 56),
+    "MR": slice(56, 62),
+    "TF": slice(62, 68),
+}
 
 
 def _cache_path(h, b):
@@ -457,6 +618,7 @@ def pnl_worker(h):
     through os._exit to skip teardown. The live basket is restored on the way out.
     """
     import shutil as _sh
+
     sys.path.insert(0, os.path.join(ROOT, "modules", "TailGAN"))
     import tailgan_eval as TE
 
@@ -469,21 +631,27 @@ def pnl_worker(h):
         if arrs:
             seeds[m] = arrs
 
-    def pnl(A):                          # whole batch at once, like vares_relerror
-        return TG.Compute_PNL(
-            TG.Tensor(np.asarray(A[:, :, :h], dtype=np.float32))).cpu().detach().numpy()
+    def pnl(A):  # whole batch at once, like vares_relerror
+        return (
+            TG.Compute_PNL(TG.Tensor(np.asarray(A[:, :, :h], dtype=np.float32)))
+            .cpu()
+            .detach()
+            .numpy()
+        )
 
     os.makedirs(CACHE, exist_ok=True)
     bak = _FIG_LIVE_IS + ".figbak"
-    if not os.path.exists(bak):          # keep the first (real reference) backup
+    if not os.path.exists(bak):  # keep the first (real reference) backup
         _sh.copyfile(_FIG_LIVE_IS, bak)
     try:
         for b in range(N_BASKETS):
             p = _cache_path(h, b)
             if os.path.exists(p):
                 continue
-            _sh.copyfile(os.path.join(_FIG_BASKET_DIR, f"basket{b}",
-                                      "TransMat_OOS.npy"), _FIG_LIVE_IS)
+            _sh.copyfile(
+                os.path.join(_FIG_BASKET_DIR, f"basket{b}", "TransMat_OOS.npy"),
+                _FIG_LIVE_IS,
+            )
             rp = pnl(real)
             assert rp.shape[1] == 68, f"expected 68 P&L columns, got {rp.shape[1]}"
             out = {st: {} for st in _STRATS}
@@ -496,8 +664,10 @@ def pnl_worker(h):
                         acc[st][0].append(d[f"RE_VaR({ALPHA})"])
                         acc[st][1].append(d[f"RE_ES({ALPHA})"])
                 for st in _STRATS:
-                    out[st][m] = [float(np.mean(acc[st][0])),
-                                  float(np.mean(acc[st][1]))]
+                    out[st][m] = [
+                        float(np.mean(acc[st][0])),
+                        float(np.mean(acc[st][1])),
+                    ]
             tmp = p + ".partial"
             with open(tmp, "wb") as fh:  # write then rename, never a half file
                 np.save(fh, np.array(out, dtype=object), allow_pickle=True)
@@ -525,23 +695,32 @@ def pnl_cached(h, tries=20):
         if not missing:
             break
         print(f"  h={h}: {len(missing)} baskets to compute")
-        subprocess.run([sys.executable, os.path.abspath(__file__),
-                        "--pnl-worker", str(h)], check=False, cwd=PROJECT)
+        subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--pnl-worker", str(h)],
+            check=False,
+            cwd=PROJECT,
+        )
     bak = _FIG_LIVE_IS + ".figbak"
-    if os.path.exists(bak):              # a crashed worker left the slot swapped
+    if os.path.exists(bak):  # a crashed worker left the slot swapped
         import shutil as _sh
+
         _sh.copyfile(bak, _FIG_LIVE_IS)
         os.remove(bak)
-    per_basket = [np.load(_cache_path(h, b), allow_pickle=True).item()
-                  for b in range(N_BASKETS) if os.path.exists(_cache_path(h, b))]
+    per_basket = [
+        np.load(_cache_path(h, b), allow_pickle=True).item()
+        for b in range(N_BASKETS)
+        if os.path.exists(_cache_path(h, b))
+    ]
     if not per_basket:
         raise RuntimeError(f"no P&L at h={h}; delete {CACHE} and retry")
     out = {}
     for st in per_basket[0]:
         out[st] = {}
         for m in per_basket[0][st]:
-            out[st][m] = (float(np.mean([d[st][m][0] for d in per_basket])),
-                          float(np.mean([d[st][m][1] for d in per_basket])))
+            out[st][m] = (
+                float(np.mean([d[st][m][0] for d in per_basket])),
+                float(np.mean([d[st][m][1] for d in per_basket])),
+            )
     return out
 
 
@@ -550,14 +729,23 @@ def fig4():
     order = [m for m in order_models() if m in pnl[HS[0]]["all"]]
 
     fig, axes = plt.subplots(2, 1, figsize=(COL, 2.42), sharex=True)
-    fig.subplots_adjust(left=0.165, right=0.985, top=0.815, bottom=0.155,
-                        hspace=0.14)
-    for ax, row, lab in zip(axes, (0, 1),
-                            [r"RE$_{\mathrm{VaR}}$", r"RE$_{\mathrm{ES}}$"]):
+    fig.subplots_adjust(left=0.165, right=0.985, top=0.815, bottom=0.155, hspace=0.14)
+    for ax, row, lab in zip(
+        axes, (0, 1), [r"RE$_{\mathrm{VaR}}$", r"RE$_{\mathrm{ES}}$"]
+    ):
         for m in order:
             y = [pnl[h]["all"][m][row] for h in HS]
-            ax.plot(HS, y, color=C[m], lw=1.2 if m == "QuantDiffusion" else 0.8,
-                    marker="o", ms=1.9, mew=0, label=m, zorder=3)
+            ax.plot(
+                HS,
+                y,
+                color=C[m],
+                lw=1.2 if m == "QuantDiffusion" else 0.8,
+                marker="o",
+                ms=1.9,
+                mew=0,
+                label=m,
+                zorder=3,
+            )
         ax.set_ylabel(f"{lab} ({ALPHA})", fontsize=6.2, labelpad=1.5)
         ax.yaxis.set_major_locator(MaxNLocator(4))
         ax.tick_params(labelsize=5.4, pad=1.2)
@@ -567,13 +755,31 @@ def fig4():
     axes[1].set_xlabel(r"horizon $h$ (trading days)", fontsize=6.2, labelpad=1.2)
     # one boxed row above the panels: Tail-GAN leaves the top of the first panel
     # at the short horizons, so anything placed inside it collides
-    relabel(axes[0], ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.02),
-            frameon=True, fancybox=False, edgecolor="#8A8A8A",
-            facecolor="white", framealpha=1.0, fontsize=4.9,
-            handlelength=0.9, handletextpad=0.3, columnspacing=0.55,
-            borderpad=0.25, borderaxespad=0.0)
-    axes[1].text(0.02, 0.05, "mean over all 68 P&L columns", fontsize=5.0,
-                 color="#666666", transform=axes[1].transAxes)
+    relabel(
+        axes[0],
+        ncol=4,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.02),
+        frameon=True,
+        fancybox=False,
+        edgecolor="#8A8A8A",
+        facecolor="white",
+        framealpha=1.0,
+        fontsize=4.9,
+        handlelength=0.9,
+        handletextpad=0.3,
+        columnspacing=0.55,
+        borderpad=0.25,
+        borderaxespad=0.0,
+    )
+    axes[1].text(
+        0.02,
+        0.05,
+        "mean over all 68 P&L columns",
+        fontsize=5.0,
+        color="#666666",
+        transform=axes[1].transAxes,
+    )
     save(fig, "fig4_risk_horizon.png")
 
 
@@ -590,12 +796,12 @@ def fig5():
     """
     import shutil
 
-    src = os.path.join(ROOT, "result", "images", "drawio",
-                       "cand_A_dmstcn_backbone.png")
+    src = os.path.join(ROOT, "result", "images", "drawio", "cand_A_dmstcn_backbone.png")
     if not os.path.exists(src):
         raise FileNotFoundError(
             f"no draw.io export at {src}. Open cand_A_dmstcn_backbone.drawio "
-            "and export as PNG at the highest dpi, then rerun.")
+            "and export as PNG at the highest dpi, then rerun."
+        )
     dst = os.path.join(OUT, "fig5_architecture.png")
     shutil.copyfile(src, dst)
     print(f"  copied the draw.io export -> {os.path.relpath(dst, ROOT)}")
@@ -620,34 +826,92 @@ def _fig5_unused():
     centres = []
     for i, (name, sub, fill) in enumerate(stages):
         x = i * (w + gap)
-        ax.add_patch(FancyBboxPatch((x, y), w, hgt,
-                                    boxstyle="round,pad=0,rounding_size=1.1",
-                                    fc=fill, ec="#6E6E68", lw=0.9, zorder=2))
-        ax.text(x + w / 2, y + hgt * 0.63, name, ha="center", va="center",
-                fontsize=7.8, zorder=3)
-        ax.text(x + w / 2, y + hgt * 0.27, sub, ha="center", va="center",
-                fontsize=6.9, color="#333333", zorder=3)
+        ax.add_patch(
+            FancyBboxPatch(
+                (x, y),
+                w,
+                hgt,
+                boxstyle="round,pad=0,rounding_size=1.1",
+                fc=fill,
+                ec="#6E6E68",
+                lw=0.9,
+                zorder=2,
+            )
+        )
+        ax.text(
+            x + w / 2,
+            y + hgt * 0.63,
+            name,
+            ha="center",
+            va="center",
+            fontsize=7.8,
+            zorder=3,
+        )
+        ax.text(
+            x + w / 2,
+            y + hgt * 0.27,
+            sub,
+            ha="center",
+            va="center",
+            fontsize=6.9,
+            color="#333333",
+            zorder=3,
+        )
         centres.append(x + w / 2)
         if i:
-            ax.add_patch(FancyArrowPatch((x - gap, y + hgt / 2),
-                                         (x - 0.6, y + hgt / 2),
-                                         arrowstyle="-|>", mutation_scale=7,
-                                         lw=0.9, color="#4A4A4A", zorder=3,
-                                         shrinkA=0, shrinkB=0))
+            ax.add_patch(
+                FancyArrowPatch(
+                    (x - gap, y + hgt / 2),
+                    (x - 0.6, y + hgt / 2),
+                    arrowstyle="-|>",
+                    mutation_scale=7,
+                    lw=0.9,
+                    color="#4A4A4A",
+                    zorder=3,
+                    shrinkA=0,
+                    shrinkB=0,
+                )
+            )
 
-    for i, txt in enumerate([r"$6\times256$", r"$12\times256$",
-                             r"$12\times256$", r"$12\times256$",
-                             r"$6\times256$"]):
-        ax.text((centres[i] + centres[i + 1]) / 2, y + hgt + 1.4, txt,
-                ha="center", va="bottom", fontsize=6.0, color="#777777")
+    for i, txt in enumerate(
+        [
+            r"$6\times256$",
+            r"$12\times256$",
+            r"$12\times256$",
+            r"$12\times256$",
+            r"$6\times256$",
+        ]
+    ):
+        ax.text(
+            (centres[i] + centres[i + 1]) / 2,
+            y + hgt + 1.4,
+            txt,
+            ha="center",
+            va="bottom",
+            fontsize=6.0,
+            color="#777777",
+        )
 
-    ax.text(50, 6.4, "three dilated blocks,  "
-            r"$k = 15,\,7,\,5$,   $d = 1,\,4,\,16$,   128 channels,  "
-            "receptive field 103", ha="center", va="top", fontsize=6.9,
-            color="#333333")
-    ax.text(50, 3.0, r"cosine schedule,  $\tau = 1.5$,  $T = 75$,  "
-            r"Student-$t$ prior,  df $= 5$", ha="center", va="top",
-            fontsize=6.9, color="#333333")
+    ax.text(
+        50,
+        6.4,
+        "three dilated blocks,  "
+        r"$k = 15,\,7,\,5$,   $d = 1,\,4,\,16$,   128 channels,  "
+        "receptive field 103",
+        ha="center",
+        va="top",
+        fontsize=6.9,
+        color="#333333",
+    )
+    ax.text(
+        50,
+        3.0,
+        r"cosine schedule,  $\tau = 1.5$,  $T = 75$,  " r"Student-$t$ prior,  df $= 5$",
+        ha="center",
+        va="top",
+        fontsize=6.9,
+        color="#333333",
+    )
     save(fig, "fig5_architecture.png")
 
 
@@ -661,22 +925,34 @@ def fig6():
     at the terminal horizon is the strategy's own entry in the risk table.
     """
     pnl = {h: pnl_cached(h) for h in HS}
-    cols = [("Port", "Static portfolios"), ("MR", "Mean reversion"),
-            ("TF", "Trend following")]
+    cols = [
+        ("Port", "Static portfolios"),
+        ("MR", "Mean reversion"),
+        ("TF", "Trend following"),
+    ]
     order = [m for m in order_models() if m in pnl[HS[0]]["all"]]
 
     fig, axes = plt.subplots(2, 3, figsize=(FULL, 2.7), sharex=True)
-    fig.subplots_adjust(left=0.072, right=0.99, top=0.80, bottom=0.135,
-                        hspace=0.14, wspace=0.24)
+    fig.subplots_adjust(
+        left=0.072, right=0.99, top=0.80, bottom=0.135, hspace=0.14, wspace=0.24
+    )
     rows = [(0, r"RE$_{\mathrm{VaR}}$"), (1, r"RE$_{\mathrm{ES}}$")]
     for j, (skey, sname) in enumerate(cols):
         for i, (row, lab) in enumerate(rows):
             ax = axes[i][j]
             for m in order:
                 y = [pnl[h][skey][m][row] for h in HS]
-                ax.plot(HS, y, color=C[m],
-                        lw=1.2 if m == "QuantDiffusion" else 0.8,
-                        marker="o", ms=1.9, mew=0, label=m, zorder=3)
+                ax.plot(
+                    HS,
+                    y,
+                    color=C[m],
+                    lw=1.2 if m == "QuantDiffusion" else 0.8,
+                    marker="o",
+                    ms=1.9,
+                    mew=0,
+                    label=m,
+                    zorder=3,
+                )
             ax.yaxis.set_major_locator(MaxNLocator(4))
             ax.tick_params(labelsize=5.4, pad=1.2)
             ax.grid(axis="y")
@@ -686,13 +962,24 @@ def fig6():
                 ax.set_title(sname, fontsize=6.8, pad=2.5)
             if j == 0:
                 ax.set_ylabel(f"{lab} ({ALPHA})", fontsize=6.2, labelpad=1.5)
-        axes[1][j].set_xlabel(r"horizon $h$ (trading days)",
-                              fontsize=6.0, labelpad=1.2)
-    relabel(axes[0][1], ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.14),
-            frameon=True, fancybox=False, edgecolor="#8A8A8A",
-            facecolor="white", framealpha=1.0, fontsize=5.2,
-            handlelength=0.9, handletextpad=0.3, columnspacing=0.7,
-            borderpad=0.25, borderaxespad=0.0)
+        axes[1][j].set_xlabel(r"horizon $h$ (trading days)", fontsize=6.0, labelpad=1.2)
+    relabel(
+        axes[0][1],
+        ncol=4,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.14),
+        frameon=True,
+        fancybox=False,
+        edgecolor="#8A8A8A",
+        facecolor="white",
+        framealpha=1.0,
+        fontsize=5.2,
+        handlelength=0.9,
+        handletextpad=0.3,
+        columnspacing=0.7,
+        borderpad=0.25,
+        borderaxespad=0.0,
+    )
     save(fig, "fig6_risk_horizon_strategies.png")
 
 

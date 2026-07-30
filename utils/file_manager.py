@@ -27,7 +27,9 @@ class quantDiffusionPath:
 
     def get_indices_ohlcv_file(self, field: str):
         # field in {O, H, L, C, V} -> data/indices/indices_{field}.csv (raw OHLCV)
-        return os.path.join(self.base_directory, "data", "indices", f"indices_{field}.csv")
+        return os.path.join(
+            self.base_directory, "data", "indices", f"indices_{field}.csv"
+        )
 
     def get_jpm_file(self):
         return os.path.join(self.base_directory, "data", "JPM.csv")

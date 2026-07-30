@@ -54,10 +54,12 @@ from engine.solver import Trainer
 DEFAULT_CONFIG = os.path.join(HERE, "Config", "indices2.yaml")
 BENCHMARK = "diffusionTS"
 RESULT_DIR = os.path.join(PROJECT, "result", "statistics", "synthetic_data", BENCHMARK)
-WEIGHT_DIR = os.path.join(PROJECT, "result", "weight", BENCHMARK)  # transient checkpoints
-SEEDS = [0, 1, 2, 3, 4]   # 5 models, one batch each -> 0.npy ... 4.npy
-GEN_SEED_OFFSET = 1000    # generation reseeds at GEN_SEED_OFFSET + seed
-SET_SIZE = 2000       # samples per set (one set per seed)
+WEIGHT_DIR = os.path.join(
+    PROJECT, "result", "weight", BENCHMARK
+)  # transient checkpoints
+SEEDS = [0, 1, 2, 3, 4]  # 5 models, one batch each -> 0.npy ... 4.npy
+GEN_SEED_OFFSET = 1000  # generation reseeds at GEN_SEED_OFFSET + seed
+SET_SIZE = 2000  # samples per set (one set per seed)
 
 
 def set_all_seeds(seed):
@@ -133,7 +135,7 @@ class NpyWindowDataset(Dataset):
 
     def __init__(self, npy_path: str, auto_norm: bool = True):
         arr_bct = np.load(npy_path).astype(np.float32)  # (B, C, T)
-        arr_btc = np.transpose(arr_bct, (0, 2, 1))      # (B, T, C)
+        arr_btc = np.transpose(arr_bct, (0, 2, 1))  # (B, T, C)
         self.B, self.T, self.C = arr_btc.shape
         self.window = self.T
         self.var_num = self.C
@@ -193,8 +195,10 @@ def compute_avg_emd(real_bct, fake_bct, window=100):
 def select_best_milestone(trainer, dataset, real_bct, milestones, n_select, device):
     """Sample from each checkpoint's EMA model, keep the one with lowest EMD vs train data."""
     best_ms, best_emd = milestones[-1], float("inf")
-    print(f"[select] evaluating {len(milestones)} checkpoints by EMD "
-          f"(n_select={n_select} samples each)...")
+    print(
+        f"[select] evaluating {len(milestones)} checkpoints by EMD "
+        f"(n_select={n_select} samples each)..."
+    )
     for ms in milestones:
         trainer.load(ms)
         ema_model = trainer.ema.ema_model
@@ -216,9 +220,12 @@ def select_best_milestone(trainer, dataset, real_bct, milestones, n_select, devi
 
 def run_seed(config, do_train, seed, args):
     """Train (or load) one seed's Diffusion-TS and generate its single 2000 batch.
-    1 model -> 1 batch, matching the quantDiffusion / QuantGAN / TailGAN 5-seed scheme."""
+    1 model -> 1 batch, matching the quantDiffusion / QuantGAN / TailGAN 5-seed scheme.
+    """
     if args.device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("--device=cuda requested but torch.cuda.is_available() is False.")
+        raise RuntimeError(
+            "--device=cuda requested but torch.cuda.is_available() is False."
+        )
     device = torch.device(args.device)
     set_all_seeds(seed)
     print(f"[run] seed {seed}: device={device}  torch={torch.__version__}")
@@ -226,43 +233,67 @@ def run_seed(config, do_train, seed, args):
     dl_cfg = config["dataloader"]
     npy_dir = os.path.normpath(os.path.join(HERE, dl_cfg["npy_dir"]))
     train_path = os.path.join(npy_dir, dl_cfg["train_name"])
-    dataset = NpyWindowDataset(train_path, auto_norm=bool(dl_cfg.get("auto_norm", True)))
+    dataset = NpyWindowDataset(
+        train_path, auto_norm=bool(dl_cfg.get("auto_norm", True))
+    )
     real_bct = np.load(train_path).astype(np.float32)
 
     dataloader = DataLoader(
-        dataset, batch_size=int(dl_cfg["batch_size"]),
-        shuffle=bool(dl_cfg.get("shuffle", True)), num_workers=0,
-        pin_memory=(device.type == "cuda"), drop_last=True,
+        dataset,
+        batch_size=int(dl_cfg["batch_size"]),
+        shuffle=bool(dl_cfg.get("shuffle", True)),
+        num_workers=0,
+        pin_memory=(device.type == "cuda"),
+        drop_last=True,
     )
     model = instantiate_from_config(config["model"]).to(device)
 
     save_dir = os.path.join(HERE, "OUTPUT", BENCHMARK, f"seed{seed}")
     runner_args = SimpleNamespace(name=BENCHMARK, save_dir=save_dir)
-    trainer = Trainer(config=config, args=runner_args, model=model,
-                      dataloader={"dataloader": dataloader, "dataset": dataset}, logger=None)
+    trainer = Trainer(
+        config=config,
+        args=runner_args,
+        model=model,
+        dataloader={"dataloader": dataloader, "dataset": dataset},
+        logger=None,
+    )
     ckpt_folder = str(trainer.results_folder)
     os.makedirs(RESULT_DIR, exist_ok=True)
     weight_dst = os.path.join(RESULT_DIR, f"diffusion_ts_best_seed{seed}.pt")
 
     if do_train:
-        print(f"[run] seed {seed}: training for {config['solver']['max_epochs']} steps "
-              f"(save_cycle={config['solver']['save_cycle']})...")
+        print(
+            f"[run] seed {seed}: training for {config['solver']['max_epochs']} steps "
+            f"(save_cycle={config['solver']['save_cycle']})..."
+        )
         trainer.train()
         if not all_milestones(ckpt_folder):
             trainer.milestone = 1
             trainer.save(trainer.milestone)
         milestones = all_milestones(ckpt_folder)
         if not milestones:
-            raise RuntimeError(f"No checkpoints under {ckpt_folder}; training produced none.")
-        best_ms = (args.milestone if args.milestone >= 0
-                   else select_best_milestone(trainer, dataset, real_bct, milestones,
-                                               args.select_samples, device))
+            raise RuntimeError(
+                f"No checkpoints under {ckpt_folder}; training produced none."
+            )
+        best_ms = (
+            args.milestone
+            if args.milestone >= 0
+            else select_best_milestone(
+                trainer, dataset, real_bct, milestones, args.select_samples, device
+            )
+        )
         trainer.load(best_ms)
-        shutil.copyfile(os.path.join(ckpt_folder, f"checkpoint-{best_ms}.pt"), weight_dst)
-        print(f"[run] seed {seed}: best weight (checkpoint-{best_ms}) saved: {weight_dst}")
+        shutil.copyfile(
+            os.path.join(ckpt_folder, f"checkpoint-{best_ms}.pt"), weight_dst
+        )
+        print(
+            f"[run] seed {seed}: best weight (checkpoint-{best_ms}) saved: {weight_dst}"
+        )
     else:
         if not os.path.exists(weight_dst):
-            raise FileNotFoundError(f"기존 weight 없음: {weight_dst} — 먼저 훈련(--train)하세요.")
+            raise FileNotFoundError(
+                f"기존 weight 없음: {weight_dst} — 먼저 훈련(--train)하세요."
+            )
         data = torch.load(weight_dst, map_location=device)
         trainer.model.load_state_dict(data["model"])
         trainer.ema.load_state_dict(data["ema"])
@@ -289,10 +320,14 @@ def run_seed(config, do_train, seed, args):
     np.save(out_path, batch)
     print(f"[run] seed {seed}: batch {batch.shape} -> {out_path}")
 
-    if do_train and not args.keep_checkpoints and ckpt_folder and os.path.isdir(ckpt_folder):
+    if (
+        do_train
+        and not args.keep_checkpoints
+        and ckpt_folder
+        and os.path.isdir(ckpt_folder)
+    ):
         shutil.rmtree(ckpt_folder, ignore_errors=True)
         print(f"[run] seed {seed}: removed intermediate checkpoints: {ckpt_folder}")
-
 
 
 def ask_train(args):
@@ -301,23 +336,53 @@ def ask_train(args):
         return True
     if args.no_train:
         return False
-    return input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
+    return input(
+        "새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: "
+    ).strip().lower() in ("y", "yes")
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="path to YAML config")
+    p.add_argument(
+        "--config", type=str, default=DEFAULT_CONFIG, help="path to YAML config"
+    )
     p.add_argument("--prep-only", action="store_true", help="only build train/test npy")
-    p.add_argument("--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)")
-    p.add_argument("--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만")
-    p.add_argument("--milestone", type=int, default=-1,
-                   help="force a checkpoint id (-1 = pick best by EMD)")
-    p.add_argument("--select-samples", type=int, default=200,
-                   help="samples drawn per checkpoint during EMD selection")
-    p.add_argument("--num-samples", type=int, default=100, help="samples per file (= sampling batch)")
-    p.add_argument("--keep-checkpoints", action="store_true",
-                   help="keep the intermediate checkpoint folder (default: delete it)")
-    p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"], help="compute device")
+    p.add_argument(
+        "--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)"
+    )
+    p.add_argument(
+        "--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만"
+    )
+    p.add_argument(
+        "--milestone",
+        type=int,
+        default=-1,
+        help="force a checkpoint id (-1 = pick best by EMD)",
+    )
+    p.add_argument(
+        "--select-samples",
+        type=int,
+        default=200,
+        help="samples drawn per checkpoint during EMD selection",
+    )
+    p.add_argument(
+        "--num-samples",
+        type=int,
+        default=100,
+        help="samples per file (= sampling batch)",
+    )
+    p.add_argument(
+        "--keep-checkpoints",
+        action="store_true",
+        help="keep the intermediate checkpoint folder (default: delete it)",
+    )
+    p.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        choices=["cuda", "cpu"],
+        help="compute device",
+    )
     return p.parse_args()
 
 

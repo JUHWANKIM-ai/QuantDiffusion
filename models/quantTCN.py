@@ -70,7 +70,12 @@ class TemporalBlock(nn.Module):
 
         # 첫 번째 convolution block
         conv1 = nn.Conv1d(
-            n_inputs, n_outputs, kernel_size, stride=stride, padding=padding, dilation=dilation
+            n_inputs,
+            n_outputs,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
         )
         self.conv1 = spectral_norm(conv1) if spec_norm else conv1
         self.chomp1 = None if padding == 0 else Chomp1d(padding)
@@ -85,7 +90,12 @@ class TemporalBlock(nn.Module):
 
         # 두 번째 convolution block
         conv2 = nn.Conv1d(
-            n_outputs, n_outputs, kernel_size, stride=stride, padding=padding, dilation=dilation
+            n_outputs,
+            n_outputs,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
         )
         self.conv2 = spectral_norm(conv2) if spec_norm else conv2
         self.chomp2 = None if padding == 0 else Chomp1d(padding)
@@ -107,7 +117,9 @@ class TemporalBlock(nn.Module):
         nn.init.kaiming_normal_(self.conv1.weight, nonlinearity="leaky_relu")
         nn.init.kaiming_normal_(self.conv2.weight, nonlinearity="leaky_relu")
         if self.downsample is not None:
-            nn.init.kaiming_normal_(self.downsample[0].weight, nonlinearity="leaky_relu")
+            nn.init.kaiming_normal_(
+                self.downsample[0].weight, nonlinearity="leaky_relu"
+            )
 
     def forward(self, x, time_emb=None):
         # 첫 번째 conv block

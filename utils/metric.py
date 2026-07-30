@@ -488,8 +488,9 @@ def _fast_acf_2d(data, nlags):
 # ---------------------------------------------------------
 # 1. ACF 비교 시각화 (초고속 연산 + 고해상도 투명 배경)
 # ---------------------------------------------------------
-def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=None,
-                        out_dir=None, name=None):
+def plot_acf_comparison(
+    real_list, fake_list, n_vars, lags=30, sampling_type=None, out_dir=None, name=None
+):
     data_transforms = [lambda x: x, np.abs, np.square]
     titles = ["Identity log returns", "Absolute log returns", "Squared log returns"]
 
@@ -547,11 +548,13 @@ def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=Non
         plt.tight_layout()
 
         # 파일로 저장할 경우 투명 배경(transparent=True) 유지
-        if out_dir is not None:                       # 타입별 폴더 저장 (파일명에 모델 tag)
+        if out_dir is not None:  # 타입별 폴더 저장 (파일명에 모델 tag)
             os.makedirs(out_dir, exist_ok=True)
             plt.savefig(
                 f"{out_dir}/{name}_acf_asset_{i}.png",
-                dpi=400, transparent=True, bbox_inches="tight",
+                dpi=400,
+                transparent=True,
+                bbox_inches="tight",
             )
         elif sampling_type:
             os.makedirs(
@@ -572,7 +575,12 @@ def plot_acf_comparison(real_list, fake_list, n_vars, lags=30, sampling_type=Non
 # 2. 상관계수 히트맵 (고해상도 투명 배경)
 # ---------------------------------------------------------
 def plot_correlation_heatmap(
-    correlation_matrix, title, feature_names, sampling_type=None, out_dir=None, name=None
+    correlation_matrix,
+    title,
+    feature_names,
+    sampling_type=None,
+    out_dir=None,
+    name=None,
 ):
     # dpi=400 및 피규어 투명화
     fig, ax = plt.subplots(figsize=(5, 4), dpi=400)
@@ -597,11 +605,13 @@ def plot_correlation_heatmap(
 
     plt.tight_layout()
 
-    if out_dir is not None:                            # 타입별 폴더 저장 (파일명에 모델 tag)
+    if out_dir is not None:  # 타입별 폴더 저장 (파일명에 모델 tag)
         os.makedirs(out_dir, exist_ok=True)
         plt.savefig(
             f"{out_dir}/{name}_correlation_{title}.png",
-            dpi=400, transparent=True, bbox_inches="tight",
+            dpi=400,
+            transparent=True,
+            bbox_inches="tight",
         )
     elif sampling_type:
         os.makedirs(f"{file_manager.get_image_path()}/{sampling_type}", exist_ok=True)
@@ -688,11 +698,13 @@ def plot_cumulative_return_dist(
 
         plt.tight_layout()
 
-        if out_dir is not None:                       # 타입별 폴더 저장 (파일명에 모델 tag)
+        if out_dir is not None:  # 타입별 폴더 저장 (파일명에 모델 tag)
             os.makedirs(out_dir, exist_ok=True)
             plt.savefig(
                 f"{out_dir}/{name}_cumret_asset_{j}.png",
-                dpi=400, transparent=True, bbox_inches="tight",
+                dpi=400,
+                transparent=True,
+                bbox_inches="tight",
             )
         elif sampling_type:
             os.makedirs(
@@ -709,8 +721,15 @@ def plot_cumulative_return_dist(
         gc.collect()
 
 
-def plot_hist_row_by_model(real_bct, fakes_by_tag, label_map=None, window=5,
-                           bins_n=81, out_path=None, asset_idx=None):
+def plot_hist_row_by_model(
+    real_bct,
+    fakes_by_tag,
+    label_map=None,
+    window=5,
+    bins_n=81,
+    out_path=None,
+    asset_idx=None,
+):
     """`window`일 누적 로그수익률 히스토그램을 모델별로 한 줄(1 x M)에 나란히.
     각 subplot: 실데이터(파랑) vs 해당 모델 합성(주황). 논문용 투명 배경.
 
@@ -719,11 +738,12 @@ def plot_hist_row_by_model(real_bct, fakes_by_tag, label_map=None, window=5,
     label_map:     {tag: 표시이름}  (없으면 tag 그대로)
     asset_idx:     None 이면 전체 자산 풀링, 정수면 해당 자산만 사용
     """
+
     def _wday_dist(bct, w):
         if asset_idx is None:
-            arr = bct.reshape(-1, bct.shape[-1])           # (B*C, T) 샘플·자산 풀링
+            arr = bct.reshape(-1, bct.shape[-1])  # (B*C, T) 샘플·자산 풀링
         else:
-            arr = bct[:, asset_idx, :]                     # (B, T) 특정 자산만
+            arr = bct[:, asset_idx, :]  # (B, T) 특정 자산만
         cs = np.insert(np.cumsum(arr, axis=1), 0, 0, axis=1)
         return (cs[:, w:] - cs[:, :-w]).ravel()
 
@@ -742,10 +762,26 @@ def plot_hist_row_by_model(real_bct, fakes_by_tag, label_map=None, window=5,
     for ax, tag in zip(axs, tags):
         ax.set_facecolor("none")
         fake_dist = _wday_dist(np.asarray(fakes_by_tag[tag]), window)
-        sns.histplot(real_dist, bins=bins, kde=False, ax=ax, color="tab:blue",
-                     alpha=0.5, stat="density", label="Historical")
-        sns.histplot(fake_dist, bins=bins, kde=False, ax=ax, color="tab:orange",
-                     alpha=0.5, stat="density", label="Synthetic")
+        sns.histplot(
+            real_dist,
+            bins=bins,
+            kde=False,
+            ax=ax,
+            color="tab:blue",
+            alpha=0.5,
+            stat="density",
+            label="Historical",
+        )
+        sns.histplot(
+            fake_dist,
+            bins=bins,
+            kde=False,
+            ax=ax,
+            color="tab:orange",
+            alpha=0.5,
+            stat="density",
+            label="Synthetic",
+        )
         ax.set_xlim(lo, hi)
         ax.yaxis.grid(True, alpha=0.3)
         ax.set_title((label_map or {}).get(tag, tag), fontsize=14, fontweight="bold")
@@ -968,7 +1004,7 @@ def log_rv_channel(a, window=10, eps=1e-8):
     actually generates rather than a derived quantity.
     """
     a = np.atleast_3d(np.asarray(a, dtype=np.float64))
-    c = np.cumsum(a ** 2, axis=-1)
+    c = np.cumsum(a**2, axis=-1)
     return np.log((c[..., window:] - c[..., :-window]) / window + eps)
 
 
@@ -990,8 +1026,9 @@ def calculate_vol_ccf(real, fake, window=10, max_lag=0):
 
     real: (B_r, C, T), fake: (B_f, C, T)
     """
-    df = calculate_ccf(log_rv_channel(real, window),
-                       log_rv_channel(fake, window), max_lag)
+    df = calculate_ccf(
+        log_rv_channel(real, window), log_rv_channel(fake, window), max_lag
+    )
     df.index = [f"Vol {i}" for i in df.index]
     df.index.name = "Metric"
     return df
