@@ -1,24 +1,27 @@
 """
-QuantGAN benchmark runner (unified convention).
+QuantGAN benchmark runner (unified 5-seed convention).
 
 Running `python run.py` end-to-end:
   1. reads the shared dataset  data/indices.csv  (repo root),
-  2. trains QuantGAN (TCN generator/discriminator),
-  3. picks the best epoch by 100-day cumulative EMD (no look-ahead: vs train data),
-  4. saves the best generator + 5 synthetic sets of 2000 samples to
+  2. trains QuantGAN (TCN generator/discriminator) once per seed for seeds 0..4
+     (5 independent models, all four RNGs pinned per seed),
+  3. picks each seed's best epoch by 100-day cumulative EMD (no look-ahead: vs train data),
+  4. saves, per seed, the best generator + ONE synthetic set of 2000 samples to
         result/statistics/synthetic_data/quantgan/
-            0.npy ... 4.npy        # each (2000, 6, 256) float32
-            generator_best.pt      # best-epoch generator weight
+            0.npy ... 4.npy                 # one batch per model, each (2000, 6, 256) float32
+            generator_best_seed{s}.pt       # best-epoch generator weight of seed s
 
-This matches the diffusionTS / TailGAN runners so all three benchmarks share
-the same output layout.
+One model -> one batch (5 models -> 5 batches), matching the quantDiffusion / TailGAN /
+diffusionTS runners so every model follows the same 5-seed scheme.
 
-    python run.py                 # full pipeline
+    python run.py                 # full pipeline (5 seeds)
     python run.py --epochs 50     # short test run
+    python run.py --no-train      # regenerate batches from existing per-seed weights
 """
 
 import argparse
 import os
+import random
 import shutil
 import sys
 from types import SimpleNamespace
@@ -43,8 +46,17 @@ DATA_CSV = os.path.join(PROJECT, "data", "indices.csv")      # shared dataset (r
 RESULT_DIR = os.path.join(PROJECT, "result", "statistics", "synthetic_data", "quantgan")
 WEIGHT_DIR = os.path.join(PROJECT, "result", "weight", "quantgan")   # transient per-epoch checkpoints
 SEQ_LEN = 256        # unified benchmark length (each synthetic series is (6, 256))
-N_SETS = 5           # number of synthetic sets (0.npy ... 4.npy)
-SET_SIZE = 2000      # samples per set
+SEEDS = [0, 1, 2, 3, 4]     # 5 models, one batch each
+GEN_SEED_OFFSET = 1000      # generation reseeds at GEN_SEED_OFFSET + seed, separate from training
+SET_SIZE = 2000      # samples per set (one set per seed)
+
+
+def set_all_seeds(seed):
+    """Pin all four RNGs (python / numpy / torch / cuda) so each seed is reproducible."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def rolling_window(data, window_size):
@@ -65,10 +77,10 @@ def compute_avg_emd(real_data, fake_data, window):
     return emd
 
 
-def make_config(epochs, device):
+def make_config(epochs, device, seed=0):
     return SimpleNamespace(
         file_name="indices", data_dir="data/", result_dir="results/", log_interval=5,
-        n_vars=6, n_steps=SEQ_LEN, device=device, seed=0,
+        n_vars=6, n_steps=SEQ_LEN, device=device, seed=seed,
         batch_size=256, n_epochs=epochs, algo="QuantGAN",
         G_hidden_dim=80, D_hidden_dim=80, output_dim=1, noise_dim=6, clip=0.01,
         lr_G=0.0002, lr_D=0.0001, D_steps_per_G_step=1,
@@ -92,10 +104,8 @@ def load_data(config):
     return train_dl, train_windowed, scalers
 
 
-def select_best_epoch(config, scalers, training_data):
+def select_best_epoch(config, scalers, training_data, models_dir):
     """Load each saved epoch and keep the one with lowest EMD vs the training data."""
-    models_dir = WEIGHT_DIR   # 중간 체크포인트는 result/weight/quantgan 에 저장됨
-
     real_data = inverse_scaling(training_data.transpose(1, 2), scalers)
     generator = UserGenerator(config).to(config.device)
 
@@ -121,77 +131,80 @@ def select_best_epoch(config, scalers, training_data):
     return generator
 
 
-def generate_sets(generator, scalers, config, n_sets):
-    """Generate n_sets synthetic sets of 2000 -> quantgan/{0..n_sets-1}.npy."""
+def generate_one(generator, scalers, config, seed, out_path):
+    """Generate ONE synthetic set of 2000 for this seed -> quantgan/{seed}.npy.
+    Reseeds at GEN_SEED_OFFSET + seed so generation is separate from and reproducible
+    like the training seed (mirrors run_multiseed.run_quantgan_seed)."""
+    set_all_seeds(GEN_SEED_OFFSET + seed)
     os.makedirs(RESULT_DIR, exist_ok=True)
     generator.eval()
     with torch.no_grad():
-        for s in range(n_sets):
-            noise = torch.randn(SET_SIZE, config.noise_dim, config.n_steps, device=config.device)
-            fake = generator(noise)
-            fake_data = inverse_scaling(fake, scalers).astype(np.float32)   # (2000, 6, 256)
-            out_path = os.path.join(RESULT_DIR, f"{s}.npy")
-            np.save(out_path, fake_data)
-            print(f"[gen] set {s}: shape={fake_data.shape} -> {out_path}")
+        noise = torch.randn(SET_SIZE, config.noise_dim, config.n_steps, device=config.device)
+        fake = generator(noise)
+        fake_data = inverse_scaling(fake, scalers).astype(np.float32)   # (2000, 6, 256)
+    np.save(out_path, fake_data)
+    print(f"[gen] seed {seed}: shape={fake_data.shape} -> {out_path}")
 
 
 def ask_plan(args):
-    """Resolve (do_train, n_sets) from CLI flags, else interactive prompts."""
+    """Resolve do_train from CLI flags, else interactive prompt. n_sets is fixed:
+    the 5-seed scheme always makes one batch per model (5 models -> 5 batches)."""
     if args.train:
-        do_train = True
-    elif args.no_train:
-        do_train = False
-    else:
-        do_train = input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
-    n_sets = args.sets
-    if n_sets is None:
-        raw = input(f"2000개짜리 샘플을 몇 묶음 생성할까요? [기본 {N_SETS}]: ").strip()
-        n_sets = int(raw) if (raw.isdigit() and int(raw) > 0) else N_SETS
-    return do_train, n_sets
+        return True
+    if args.no_train:
+        return False
+    return input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--epochs", type=int, default=300)
-    ap.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
-    ap.add_argument("--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)")
-    ap.add_argument("--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만")
-    ap.add_argument("--sets", type=int, default=None, help="생성할 2000개 묶음 수 (미지정 시 질문)")
-    args = ap.parse_args()
-    if args.device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("--device=cuda requested but CUDA is not available.")
-
-    do_train, n_sets = ask_plan(args)
-    config = make_config(args.epochs, args.device)
+def run_seed(seed, do_train, epochs, device):
+    """Train (or load) one seed's QuantGAN and generate its single batch."""
+    set_all_seeds(seed)
+    config = make_config(epochs, device, seed=seed)
     train_dl, training_data, scalers = load_data(config)
-    weight_path = os.path.join(RESULT_DIR, "generator_best.pt")
+    weight_path = os.path.join(RESULT_DIR, f"generator_best_seed{seed}.pt")
+    ckpt_dir = os.path.join(WEIGHT_DIR, f"seed{seed}")          # transient per-seed checkpoints
 
     if do_train:
         generator = UserGenerator(config)
         discriminator = UserDiscriminator(config)
         trainer = GANTrainer(G=generator, D=discriminator, train_dl=train_dl, config=config)
-        # 중간 체크포인트는 result/weight/quantgan 에 저장 (모듈 내 ./results 사용 안 함)
-        shutil.rmtree(WEIGHT_DIR, ignore_errors=True)
-        os.makedirs(WEIGHT_DIR, exist_ok=True)
-        trainer.results_dir = WEIGHT_DIR
-        shutil.rmtree(os.path.join(HERE, "results"), ignore_errors=True)  # 생성자가 만든 빈 폴더 정리
-        print(f"[run] training QuantGAN for {config.n_epochs} epochs...")
-        trainer.fit()                                                   # result/weight/quantgan/Generator_{e}.pt
-        generator = select_best_epoch(config, scalers, training_data)   # best epoch by EMD
+        shutil.rmtree(ckpt_dir, ignore_errors=True)
+        os.makedirs(ckpt_dir, exist_ok=True)
+        trainer.results_dir = ckpt_dir
+        shutil.rmtree(os.path.join(HERE, "results"), ignore_errors=True)  # trainer __init__ mkdir
+        print(f"[run] seed {seed}: training QuantGAN for {config.n_epochs} epochs...")
+        trainer.fit()                                                  # ckpt_dir/Generator_{e}.pt
+        generator = select_best_epoch(config, scalers, training_data, ckpt_dir)  # best epoch by EMD
         os.makedirs(RESULT_DIR, exist_ok=True)
         torch.save(generator.state_dict(), weight_path)
-        print(f"[run] generator weight saved: {weight_path}")
-        shutil.rmtree(WEIGHT_DIR, ignore_errors=True)                   # 중간 체크포인트 삭제
-        print(f"[run] removed intermediate checkpoints: {WEIGHT_DIR}")
+        print(f"[run] seed {seed}: generator weight saved: {weight_path}")
+        shutil.rmtree(ckpt_dir, ignore_errors=True)                    # drop intermediate checkpoints
     else:
         if not os.path.exists(weight_path):
             raise FileNotFoundError(f"기존 weight 없음: {weight_path} — 먼저 훈련(--train)하세요.")
         generator = UserGenerator(config).to(config.device)
         generator.load_state_dict(torch.load(weight_path, map_location=config.device))
-        print(f"[run] 기존 weight 로드: {weight_path}")
+        print(f"[run] seed {seed}: 기존 weight 로드: {weight_path}")
 
-    print(f"[run] 2000개 x {n_sets}묶음 생성...")
-    generate_sets(generator, scalers, config, n_sets)
+    generate_one(generator, scalers, config, seed, os.path.join(RESULT_DIR, f"{seed}.npy"))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--epochs", type=int, default=200)
+    ap.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
+    ap.add_argument("--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)")
+    ap.add_argument("--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만")
+    ap.add_argument("--seeds", nargs="+", type=int, default=SEEDS, help="훈련/생성할 시드 (기본 0..4)")
+    args = ap.parse_args()
+    if args.device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("--device=cuda requested but CUDA is not available.")
+
+    do_train = ask_plan(args)
+    print(f"[run] 5-seed scheme: seeds={args.seeds} -> one 2000 batch per model")
+    for seed in args.seeds:
+        print(f"\n{'='*60}\nQuantGAN seed={seed}\n{'='*60}")
+        run_seed(seed, do_train, args.epochs, args.device)
 
 
 if __name__ == "__main__":

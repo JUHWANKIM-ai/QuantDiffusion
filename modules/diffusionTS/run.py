@@ -6,11 +6,12 @@ Running `python run.py` end-to-end:
   2. trains Diffusion_TS, checkpointing every `save_cycle` steps,
   3. picks the best checkpoint by 100-day cumulative EMD (no look-ahead: vs train data),
      mirroring the QuantGAN runner,
-  4. saves the best weight + 5 synthetic sets of 2000 samples to
+  4. trains once per seed (0..4) and saves, per seed, the best weight + ONE synthetic
+     set of 2000 samples (1 model -> 1 batch) to
         result/statistics/synthetic_data/diffusionTS/
-            0.npy ... 4.npy        # each (2000, 6, 256) float32
-            quantDiffusion_best.pt # best-EMD checkpoint
-  5. deletes the intermediate checkpoint folder (result/weight/diffusionTS_256/).
+            0.npy ... 4.npy                 # one batch per model, each (2000, 6, 256) float32
+            diffusion_ts_best_seed{s}.pt    # best-EMD checkpoint of seed s
+  5. deletes the intermediate checkpoint folder after each seed.
 
 Intermediate per-step checkpoints are written under  result/weight/  (not the
 module dir) and pruned once the best is selected.
@@ -20,14 +21,15 @@ the same output layout.
 
 Modes
 -----
-    python run.py                  # full pipeline (train if needed -> select -> sample -> bundle)
-    python run.py --train          # force (re)train
-    python run.py --sample         # select + sample only (needs existing checkpoints)
+    python run.py                  # full pipeline, 5 seeds (train -> select -> 1 batch each)
+    python run.py --train          # force (re)train all seeds
+    python run.py --no-train       # 1 batch per seed from existing per-seed weights
     python run.py --prep-only      # only build the train/test .npy cache
 """
 
 import argparse
 import gc
+import random
 import os
 import shutil
 import sys
@@ -53,8 +55,17 @@ DEFAULT_CONFIG = os.path.join(HERE, "Config", "indices2.yaml")
 BENCHMARK = "diffusionTS"
 RESULT_DIR = os.path.join(PROJECT, "result", "statistics", "synthetic_data", BENCHMARK)
 WEIGHT_DIR = os.path.join(PROJECT, "result", "weight", BENCHMARK)  # transient checkpoints
-N_SETS = 5            # number of synthetic sets (0.npy ... 4.npy)
-SET_SIZE = 2000       # samples per set
+SEEDS = [0, 1, 2, 3, 4]   # 5 models, one batch each -> 0.npy ... 4.npy
+GEN_SEED_OFFSET = 1000    # generation reseeds at GEN_SEED_OFFSET + seed
+SET_SIZE = 2000       # samples per set (one set per seed)
+
+
+def set_all_seeds(seed):
+    """Pin python / numpy / torch / cuda RNGs so each seed is reproducible."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 # ---------- phase 1: data prep ----------
@@ -203,50 +214,38 @@ def select_best_milestone(trainer, dataset, real_bct, milestones, n_select, devi
     return best_ms
 
 
-def run_pipeline(config: dict, do_train: bool, n_sets: int, args):
+def run_seed(config, do_train, seed, args):
+    """Train (or load) one seed's Diffusion-TS and generate its single 2000 batch.
+    1 model -> 1 batch, matching the quantDiffusion / QuantGAN / TailGAN 5-seed scheme."""
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("--device=cuda requested but torch.cuda.is_available() is False.")
     device = torch.device(args.device)
-    if device.type == "cuda":
-        print(f"[run] device={device} ({torch.cuda.get_device_name(device)})  torch={torch.__version__}")
-    else:
-        print(f"[run] device={device}  torch={torch.__version__}  (CPU is much slower!)")
+    set_all_seeds(seed)
+    print(f"[run] seed {seed}: device={device}  torch={torch.__version__}")
 
     dl_cfg = config["dataloader"]
     npy_dir = os.path.normpath(os.path.join(HERE, dl_cfg["npy_dir"]))
     train_path = os.path.join(npy_dir, dl_cfg["train_name"])
     dataset = NpyWindowDataset(train_path, auto_norm=bool(dl_cfg.get("auto_norm", True)))
-    real_bct = np.load(train_path).astype(np.float32)  # original-scale train data for EMD
-    print(f"[run] dataset: B={dataset.B} T={dataset.T} C={dataset.C}")
+    real_bct = np.load(train_path).astype(np.float32)
 
     dataloader = DataLoader(
-        dataset,
-        batch_size=int(dl_cfg["batch_size"]),
-        shuffle=bool(dl_cfg.get("shuffle", True)),
-        num_workers=0,
-        pin_memory=(device.type == "cuda"),
-        drop_last=True,
+        dataset, batch_size=int(dl_cfg["batch_size"]),
+        shuffle=bool(dl_cfg.get("shuffle", True)), num_workers=0,
+        pin_memory=(device.type == "cuda"), drop_last=True,
     )
-
     model = instantiate_from_config(config["model"]).to(device)
-    print(f"[run] model on: {next(model.parameters()).device}")
 
-    save_dir = os.path.join(HERE, "OUTPUT", BENCHMARK)
+    save_dir = os.path.join(HERE, "OUTPUT", BENCHMARK, f"seed{seed}")
     runner_args = SimpleNamespace(name=BENCHMARK, save_dir=save_dir)
-    trainer = Trainer(
-        config=config,
-        args=runner_args,
-        model=model,
-        dataloader={"dataloader": dataloader, "dataset": dataset},
-        logger=None,
-    )
+    trainer = Trainer(config=config, args=runner_args, model=model,
+                      dataloader={"dataloader": dataloader, "dataset": dataset}, logger=None)
     ckpt_folder = str(trainer.results_folder)
     os.makedirs(RESULT_DIR, exist_ok=True)
-    weight_dst = os.path.join(RESULT_DIR, "quantDiffusion_best.pt")
+    weight_dst = os.path.join(RESULT_DIR, f"diffusion_ts_best_seed{seed}.pt")
 
     if do_train:
-        # ---- train (checkpoints -> result/weight), then pick best by EMD ----
-        print(f"[run] training for {config['solver']['max_epochs']} steps "
+        print(f"[run] seed {seed}: training for {config['solver']['max_epochs']} steps "
               f"(save_cycle={config['solver']['save_cycle']})...")
         trainer.train()
         if not all_milestones(ckpt_folder):
@@ -260,84 +259,49 @@ def run_pipeline(config: dict, do_train: bool, n_sets: int, args):
                                                args.select_samples, device))
         trainer.load(best_ms)
         shutil.copyfile(os.path.join(ckpt_folder, f"checkpoint-{best_ms}.pt"), weight_dst)
-        print(f"[run] best weight (checkpoint-{best_ms}) saved: {weight_dst}")
+        print(f"[run] seed {seed}: best weight (checkpoint-{best_ms}) saved: {weight_dst}")
     else:
-        # ---- reuse the existing trained weight; no checkpoints needed ----
         if not os.path.exists(weight_dst):
             raise FileNotFoundError(f"기존 weight 없음: {weight_dst} — 먼저 훈련(--train)하세요.")
         data = torch.load(weight_dst, map_location=device)
         trainer.model.load_state_dict(data["model"])
         trainer.ema.load_state_dict(data["ema"])
-        print(f"[run] 기존 weight 로드: {weight_dst}")
+        print(f"[run] seed {seed}: 기존 weight 로드: {weight_dst}")
 
-    # ---- generate synthetic samples ----
+    # ---- generate ONE batch of SET_SIZE for this seed ----
     ema_model = trainer.ema.ema_model
     ema_model.eval()
     for p in ema_model.parameters():
         p.requires_grad_(False)
-    for attr in ("opt", "sch", "dl", "dataloader"):
-        if hasattr(trainer, attr):
-            delattr(trainer, attr)
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    files_per_set = max(1, SET_SIZE // args.num_samples)
-    num_files = n_sets * files_per_set
-    sample_dir = os.path.join(save_dir, "samples")
-    if os.path.isdir(sample_dir):
-        shutil.rmtree(sample_dir)        # drop stale samples from a previous run
-    os.makedirs(sample_dir, exist_ok=True)
+    set_all_seeds(GEN_SEED_OFFSET + seed)
+    chunks = []
+    remaining = SET_SIZE
+    while remaining > 0:
+        n = min(args.num_samples, remaining)
+        chunks.append(generate_bct(ema_model, dataset, n, device))
+        remaining -= n
+    batch = np.concatenate(chunks, axis=0)[:SET_SIZE].astype(np.float32)
+    out_path = os.path.join(RESULT_DIR, f"{seed}.npy")
+    np.save(out_path, batch)
+    print(f"[run] seed {seed}: batch {batch.shape} -> {out_path}")
 
-    for k in range(num_files):
-        t0 = time.perf_counter()
-        samples_bct = generate_bct(ema_model, dataset, args.num_samples, device)
-        out_path = os.path.join(sample_dir, f"{BENCHMARK}_synthetic_{k:03d}.npy")
-        np.save(out_path, samples_bct)
-        print(f"[run] {k + 1}/{num_files}  gen={time.perf_counter() - t0:.2f}s  "
-              f"-> {os.path.basename(out_path)}")
-        del samples_bct
-        gc.collect()
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-    return ckpt_folder, files_per_set
+    if do_train and not args.keep_checkpoints and ckpt_folder and os.path.isdir(ckpt_folder):
+        shutil.rmtree(ckpt_folder, ignore_errors=True)
+        print(f"[run] seed {seed}: removed intermediate checkpoints: {ckpt_folder}")
 
 
-def bundle_samples(n_sets, files_per_set):
-    """Concatenate sampled .npy files into n_sets sets of 2000 -> diffusionTS/{0..n_sets-1}.npy."""
-    src_dir = os.path.join(HERE, "OUTPUT", BENCHMARK, "samples")
-    os.makedirs(RESULT_DIR, exist_ok=True)
-    files = sorted(f for f in os.listdir(src_dir) if f.endswith(".npy"))
-    needed = files_per_set * n_sets
-    print(f"[bundle] {len(files)} files; need {needed} for {n_sets}x{SET_SIZE}")
-    if len(files) < needed:
-        raise RuntimeError(f"need {needed} files, have {len(files)}")
 
-    for g in range(n_sets):
-        chunk = files[g * files_per_set:(g + 1) * files_per_set]
-        merged = np.concatenate([np.load(os.path.join(src_dir, f)) for f in chunk], axis=0)
-        merged = merged[:SET_SIZE].astype(np.float32)
-        out_path = os.path.join(RESULT_DIR, f"{g}.npy")
-        np.save(out_path, merged)
-        print(f"[bundle] set {g}: shape={merged.shape} -> {out_path}")
-        del merged
-        gc.collect()
-
-
-def ask_plan(args):
-    """Resolve (do_train, n_sets) from CLI flags, else interactive prompts."""
+def ask_train(args):
+    """Resolve do_train (5-seed scheme is fixed at one batch per model)."""
     if args.train:
-        do_train = True
-    elif args.no_train:
-        do_train = False
-    else:
-        do_train = input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
-    n_sets = args.sets
-    if n_sets is None:
-        raw = input(f"2000개짜리 샘플을 몇 묶음 생성할까요? [기본 {N_SETS}]: ").strip()
-        n_sets = int(raw) if (raw.isdigit() and int(raw) > 0) else N_SETS
-    return do_train, n_sets
+        return True
+    if args.no_train:
+        return False
+    return input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
 
 
 def parse_args():
@@ -346,7 +310,6 @@ def parse_args():
     p.add_argument("--prep-only", action="store_true", help="only build train/test npy")
     p.add_argument("--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)")
     p.add_argument("--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만")
-    p.add_argument("--sets", type=int, default=None, help="생성할 2000개 묶음 수 (미지정 시 질문)")
     p.add_argument("--milestone", type=int, default=-1,
                    help="force a checkpoint id (-1 = pick best by EMD)")
     p.add_argument("--select-samples", type=int, default=200,
@@ -371,12 +334,11 @@ def main():
     if args.prep_only:
         return
 
-    do_train, n_sets = ask_plan(args)
-    ckpt_folder, files_per_set = run_pipeline(config, do_train, n_sets, args)
-    bundle_samples(n_sets, files_per_set)
-    if do_train and not args.keep_checkpoints and ckpt_folder and os.path.isdir(ckpt_folder):
-        shutil.rmtree(ckpt_folder, ignore_errors=True)
-        print(f"[main] removed intermediate checkpoint folder: {ckpt_folder}")
+    do_train = ask_train(args)
+    print(f"[main] 5-seed scheme: seeds={SEEDS} -> one 2000 batch per model")
+    for seed in SEEDS:
+        print(f"\n{'='*60}\nDiffusion-TS seed={seed}\n{'='*60}")
+        run_seed(config, do_train, seed, args)
 
 
 if __name__ == "__main__":

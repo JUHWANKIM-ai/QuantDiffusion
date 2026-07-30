@@ -1,25 +1,24 @@
 """
-TailGAN benchmark runner (unified convention).
+TailGAN benchmark runner (unified 5-seed convention).
 
 Running `python run.py` end-to-end:
   1. reads the shared dataset  data/indices.csv  (repo root) and builds the
      rolling-window CSVs TailGAN expects,
-  2. trains an ENSEMBLE of --ensemble models (original TailGAN numNN, default 10;
-     distinct seeds), original TailGAN.py logic, saving generators every 100 epochs,
-  3. selects, per the ORIGINAL-PAPER ensemble scheme: screens models by final
-     training-loss (keep <= --screen-pct percentile), then picks each survivor's
-     best epoch by --select (default 'vares' = min VaR/ES relative error vs train
-     data, the quantity TailGAN optimizes; also 'last' / 'emd'),
-  4. pools samples equally across the surviving generators into 5 synthetic sets to
+  2. trains --models independent models (default 5, distinct seeds), original
+     TailGAN.py logic, saving generators every 100 epochs,
+  3. keeps each model's FINAL epoch (the official TailGAN checkpoint; no
+     gen-quality selection, no convergence screening, no ensembling),
+  4. generates ONE synthetic set per model (model m -> batch m, no pooling) to
         result/statistics/synthetic_data/tailgan/
-            0.npy ... 4.npy               # each (2000, 6, 256) float32
-            generator_best_id{m}.pt       # best epoch of each surviving model
+            0.npy ... 4.npy               # one batch per model, each (2000, 6, 256) float32
+            generator_best_id{m}.pt       # final-epoch generator of model m
 
-This matches the diffusionTS / QuantGAN runners so all three benchmarks share
-the same output layout.
+One model -> one batch (5 models -> 5 batches), matching the quantDiffusion /
+QuantGAN / diffusionTS runners so every model follows the same 5-seed scheme.
 
-    python run.py                 # full pipeline
+    python run.py                 # full pipeline (5 models)
     python run.py --epochs 50     # short test run
+    python run.py --no-train      # regenerate batches from existing per-model weights
 """
 
 import argparse
@@ -45,8 +44,9 @@ TICKERS = ["DJI", "NASDAQ", "JPM", "HSI", "GOLD", "WTI_OIL"]
 DATA_NAME = "indices2_6d"
 N_ROWS, N_COLS = 6, 256
 TRAIN_RATIO = 0.7
-N_SETS = 5            # number of synthetic sets (0.npy ... 4.npy)
-SET_SIZE = 2000       # samples per set
+N_MODELS = 5          # 5 models (seeds), one batch each -> 0.npy ... 4.npy
+GEN_SEED_OFFSET = 1000  # generation reseeds np.random at GEN_SEED_OFFSET + model index
+SET_SIZE = 2000       # samples per set (one set per model)
 STATIC_PORT_SEED = 0  # see ensure_static_basket
 
 
@@ -224,117 +224,34 @@ def ensure_static_basket(gsp, n_rows=N_ROWS, n_ports=50, static_way="LShort"):
                                              static_way=static_way)
 
 
-def screen_ensemble(gen_data_path, num_nn, thres_pct=50, criterion="min"):
-    """TailGAN convergence screen: keep models whose generator loss <= thres_pct percentile.
-
-    Training loss only, no look-forward bias, as in the original Screen_Ensemble.
-
-    The original screens on the FINAL generator loss. That assumes the loss is still
-    at its best when training stops. With the discriminator warmup in place it is
-    not: the loss reaches its floor near epoch 600 and then climbs as the critic
-    loses accuracy again (measured: floor gap +0.037 at epoch 600, +1.028 at 1999).
-    Screening on the final value therefore ranks models by how far the critic had
-    drifted at the last epoch, not by how well the generator converged, and can
-    discard a model whose epoch 600 was excellent. criterion="min" uses each
-    model's best epoch instead, which is what "models with a good converge" means
-    once the tail of training is no longer monotone. Both rankings are printed.
-    """
-    finals, mins = [], []
-    for m in range(num_nn):
-        loss = np.load(join(gen_data_path, f"loss_id{m}.npy"))   # (2, n_epochs): rows = [D, G]
-        finals.append(float(loss[1, -1]))
-        mins.append(float(np.min(loss[1])))
-    vals = mins if criterion == "min" else finals
-    thr = float(np.percentile(vals, thres_pct))
-    survivors = [m for m in range(num_nn) if vals[m] <= thr]
-    print("[screen] final G-loss: " + ", ".join(f"m{m}={v:.4f}" for m, v in enumerate(finals)))
-    print("[screen] min   G-loss: " + ", ".join(f"m{m}={v:.4f}" for m, v in enumerate(mins)))
-    print(f"[screen] criterion={criterion}, threshold(<= p{thres_pct})={thr:.4f} "
-          f"-> survivors {survivors}")
-    alt = float(np.percentile(finals if criterion == "min" else mins, thres_pct))
-    other = [m for m in range(num_nn)
-             if (finals[m] if criterion == "min" else mins[m]) <= alt]
-    print(f"[screen] the other criterion would have kept {other}")
-    return survivors
+def last_epoch_for_model(ckpt_dir, m):
+    """The final (highest-epoch) checkpoint of model m -> official TailGAN weight, no selection."""
+    def _ep(pth):
+        return int(re.search(r"_E(\d+)", pth).group(1))
+    ckpts = sorted(glob.glob(join(ckpt_dir, f"generator_id{m}_E*.pt")), key=_ep)
+    if not ckpts:
+        raise RuntimeError(f"model {m}: no generator checkpoints were saved during training")
+    return ckpts[-1]
 
 
-def _pick_epoch(TG, ckpts, metric, real_bct, real_pnl, sample_n, alphas=(0.05, 0.025, 0.01)):
-    """Pick one checkpoint from a single model's saved epochs by `metric` (vares/emd/last)."""
+def generate_per_model(TG, weight_paths, set_size=SET_SIZE):
+    """Non-pooled generation: model m's weight -> its own batch m (set_size, 6, 256).
+    Reseeds np.random at GEN_SEED_OFFSET + m so every batch is reproducible, mirroring the
+    quantDiffusion / QuantGAN 5-seed generation convention (1 model -> 1 batch)."""
     import torch
-    import tailgan_eval
-
-    if metric == "last":
-        return ckpts[-1], float("nan")
-
-    G = TG.Generator()
-    if TG.cuda:
-        G.cuda()
-    best_p, best_v = ckpts[-1], float("inf")
-    for ck in ckpts:
-        G.load_state_dict(torch.load(ck, map_location="cuda" if TG.cuda else "cpu"))
-        G.eval()
-        with torch.no_grad():
-            fake = G(_tail_noise(TG, sample_n)).cpu().numpy().astype(np.float32)
-        if metric == "vares":
-            fake_pnl = TG.Compute_PNL(TG.Tensor(fake)).cpu().detach().numpy()
-            v = float(np.mean(list(tailgan_eval.relerror(real_pnl, fake_pnl, alphas).values())))
-        else:  # emd
-            v = compute_avg_emd(real_bct, fake, 100)
-        if v < best_v:
-            best_v, best_p = v, ck
-    return best_p, best_v
-
-
-def select_ensemble(TG, real_bct, ckpt_dir, sample_n, num_nn, screen_pct, gen_data_path,
-                    metric="vares", alphas=(0.05, 0.025, 0.01), screen_by="min"):
-    """Original TailGAN ensemble selection: screen by convergence, then pick each survivor's
-    best epoch by `metric`. Returns {model_index: best_ckpt_path}. (num_nn==1 -> single model.)
-    """
-    def _ep(p):
-        return int(re.search(r"_E(\d+)", p).group(1))
-
-    survivors = (screen_ensemble(gen_data_path, num_nn, screen_pct, screen_by)
-                 if num_nn > 1 else [0])
-    real_pnl = (TG.Compute_PNL(TG.Tensor(real_bct)).cpu().detach().numpy()
-                if metric == "vares" else None)
-    best = {}
-    for m in survivors:
-        ckpts = sorted(glob.glob(join(ckpt_dir, f"generator_id{m}_E*.pt")), key=_ep)
-        if not ckpts:
-            print(f"[select] model {m}: no checkpoints, skip")
-            continue
-        bp, bv = _pick_epoch(TG, ckpts, metric, real_bct, real_pnl, sample_n, alphas)
-        best[m] = bp
-        print(f"[select] model {m}: best {os.path.basename(bp)}  ({metric}={bv:.5f})")
-    if not best:
-        raise RuntimeError("ensemble selection produced no generators")
-    return best
-
-
-def generate_ensemble(TG, weight_paths, n_sets, set_size=SET_SIZE):
-    """Pool samples equally across the ensemble's best generators into n_sets of set_size."""
-    import torch
-
-    gens = []
-    for p in weight_paths:
+    os.makedirs(RESULT_DIR, exist_ok=True)
+    for m, p in enumerate(sorted(weight_paths)):
         g = TG.Generator()
         if TG.cuda:
             g.cuda()
         g.load_state_dict(torch.load(p, map_location="cuda" if TG.cuda else "cpu"))
         g.eval()
-        gens.append(g)
-    k = len(gens)
-    per = int(np.ceil(set_size / k))
-    os.makedirs(RESULT_DIR, exist_ok=True)
-    with torch.no_grad():
-        for s in range(n_sets):
-            parts = [g(_tail_noise(TG, per)).cpu().numpy().astype(np.float32) for g in gens]
-            pooled = np.concatenate(parts, axis=0)
-            idx = np.random.permutation(pooled.shape[0])[:set_size]
-            fake_data = pooled[idx]
-            out_path = join(RESULT_DIR, f"{s}.npy")
-            np.save(out_path, fake_data)
-            print(f"[gen] set {s}: shape={fake_data.shape} (pooled from {k} model(s)) -> {out_path}")
+        np.random.seed(GEN_SEED_OFFSET + m)
+        with torch.no_grad():
+            fake = g(_tail_noise(TG, set_size)).cpu().numpy().astype(np.float32)
+        out_path = join(RESULT_DIR, f"{m}.npy")
+        np.save(out_path, fake)
+        print(f"[gen] model {m}: shape={fake.shape} (from {os.path.basename(p)}) -> {out_path}")
 
 
 def train_single_warm(TG, o, dataloader, model_index, seed, warmup_steps, warmup_lr):
@@ -355,12 +272,18 @@ def train_single_warm(TG, o, dataloader, model_index, seed, warmup_steps, warmup
     same layout so screen_ensemble and select_ensemble keep working.
     """
     import time
+    import random
 
     import numpy as np
     import torch
     from torch.autograd import Variable
 
+    # per-model reproducibility: pin all four RNGs (statistical, matching the notebook
+    # and QuantGAN/Diffusion-TS runners; cuDNN is left nondeterministic as in those)
+    random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     Tensor = TG.Tensor
     generator, discriminator, criterion = TG.Generator(), TG.Discriminator(), TG.Score()
     if TG.cuda:
@@ -454,7 +377,7 @@ def train_single_warm(TG, o, dataloader, model_index, seed, warmup_steps, warmup
                   f"[gen std: {np.round(std, 4)}] "
                   f"--- {int(time.time() - start_time)}s ---")
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == o.n_epochs - 1:
             torch.save(discriminator.state_dict(),
                        join(TG.model_path, "discriminator_id%d_E%d" % (model_index, epoch)))
             torch.save(generator.state_dict(),
@@ -466,19 +389,15 @@ def train_single_warm(TG, o, dataloader, model_index, seed, warmup_steps, warmup
             np.array(diag_l).T)      # rows = [real_score, empirical floor]
 
 
-def ask_plan(args):
-    """Resolve (do_train, n_sets) from CLI flags, else interactive prompts."""
+def ask_train(args):
+    """Resolve do_train from CLI flags, else interactive prompt. The 5-seed scheme is
+    fixed at one batch per model (N_MODELS models -> N_MODELS batches), so there is no
+    set count to ask for."""
     if args.train:
-        do_train = True
-    elif args.no_train:
-        do_train = False
-    else:
-        do_train = input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
-    n_sets = args.sets
-    if n_sets is None:
-        raw = input(f"2000개짜리 샘플을 몇 묶음 생성할까요? [기본 {N_SETS}]: ").strip()
-        n_sets = int(raw) if (raw.isdigit() and int(raw) > 0) else N_SETS
-    return do_train, n_sets
+        return True
+    if args.no_train:
+        return False
+    return input("새로 훈련하시겠습니까? 기존 weight으로 생성만 하려면 n [y/N]: ").strip().lower() in ("y", "yes")
 
 
 def main():
@@ -495,20 +414,11 @@ def main():
                     help="D warmup 단계의 lr (measured: 1e-3에서 100 step 내 floor 도달)")
     ap.add_argument("--train", action="store_true", help="새로 훈련 (미지정 시 대화형 질문)")
     ap.add_argument("--no-train", action="store_true", help="훈련 없이 기존 weight으로 생성만")
-    ap.add_argument("--sets", type=int, default=None, help="생성할 2000개 묶음 수 (미지정 시 질문)")
-    ap.add_argument("--select-samples", type=int, default=1000,
-                    help="best epoch EMD 선택 시 체크포인트당 생성 샘플 수")
-    ap.add_argument("--select-min-epoch", type=int, default=2000,
-                    help="best EMD 선택 후보의 최소 epoch (이 이상에서만 고름; --select=emd 일 때만)")
-    ap.add_argument("--select", type=str, default="vares", choices=["vares", "last", "emd"],
-                    help="모델별 epoch 선정: 'vares'=VaR/ES 상대오차 최소(원논문 기본), 'last'=마지막, 'emd'=train 최소 EMD")
-    ap.add_argument("--ensemble", type=int, default=10, help="앙상블 모델 수 numNN (원논문 기본 10; 1이면 단일)")
-    ap.add_argument("--screen-pct", type=int, default=50, help="수렴 스크리닝 백분위 (이하 생존)")
-    ap.add_argument("--screen-by", type=str, default="min", choices=["min", "final"],
-                    help="스크리닝에 쓸 G-loss: 'min'=모델별 최저(기본), 'final'=마지막 (원논문)")
+    ap.add_argument("--models", type=int, default=N_MODELS,
+                    help="모델(=시드) 개수 (기본 5; 모델당 배치 1개, pooling 없음)")
     args = ap.parse_args()
 
-    do_train, n_sets = ask_plan(args)
+    do_train = ask_train(args)
 
     # TailGAN uses flat imports (from Dataset import ...) and relative paths -> run from its dir.
     sys.path.insert(0, TG_DIR)
@@ -537,15 +447,10 @@ def main():
         o.n_rows, o.n_cols = N_ROWS, N_COLS
         o.tickers = TICKERS
         o.data_name = DATA_NAME
-        o.numNN = args.ensemble
+        o.numNN = args.models                       # 5 models, one batch each (no ensembling)
         o.n_epochs = args.epochs
         if args.batch is not None:
             o.batch_size = args.batch
-        # sys.argv is reset above so TailGAN's argparse keeps its own defaults,
-        # lr_D=1e-7 and lr_G=1e-6. Those were tuned for the paper's synthetic demo
-        # (5 series, 100 steps, len=50000). Here len trims to 3000 with batch 1000,
-        # so an epoch is 3 steps and 3000 epochs is only 9000 generator updates:
-        # the generator barely moves. Allow the rates to be set explicitly.
         if args.lr_g is not None:
             o.lr_G = args.lr_g
         if args.lr_d is not None:
@@ -562,10 +467,10 @@ def main():
         print(f"[run] R_shape={TG.R_shape}, len={o.len}, n_epochs={o.n_epochs}, "
               f"batch={o.batch_size}, steps/epoch={o.len // o.batch_size}, "
               f"lr_G={o.lr_G}, lr_D={o.lr_D}, "
-              f"d_warmup={args.d_warmup}@{args.lr_d_warmup:g}")
+              f"d_warmup={args.d_warmup}@{args.lr_d_warmup:g}, models={o.numNN}")
         shutil.rmtree(join(TG_DIR, "your_path"), ignore_errors=True)  # clean stray import-time dir
 
-        # ---- keep every per-100-epoch generator under result/weight (for EMD selection) ----
+        # ---- keep every per-100-epoch generator under result/weight (transient) ----
         tmp_ckpt = WEIGHT_DIR
         shutil.rmtree(tmp_ckpt, ignore_errors=True)
         os.makedirs(tmp_ckpt, exist_ok=True)
@@ -590,11 +495,17 @@ def main():
             return None
 
         _np.save, _torch.save = _np_save_skip_fake, _torch_save_gen_only
-        # ---- train the ensemble (numNN models, distinct seeds), saving generators every 100 epochs ----
+        # ---- train N models (distinct seeds), saving generators every 100 epochs ----
         from Dataset import Dataset_IS
         base_seed = getattr(TG, "seed", 1)
         dataset = Dataset_IS(tickers=o.tickers, data_path=join(YOUR_PATH, "gan_data", o.data_name), length=o.len)
         dataloader = _torch.utils.data.DataLoader(dataset, batch_size=o.batch_size, shuffle=True)
+        # each model's FINAL-epoch weight is written straight to synthetic_data/tailgan the
+        # moment that model finishes training, so a completed model is visible immediately
+        # (no waiting for the whole run). Official TailGAN scheme: final epoch, no selection.
+        os.makedirs(RESULT_DIR, exist_ok=True)
+        for fp in glob.glob(join(RESULT_DIR, "generator_best*.pt")):
+            os.remove(fp)
         for m in range(o.numNN):
             print(f"------ Model {m}/{o.numNN} (seed {base_seed + m}) ------")
             if args.d_warmup > 0:
@@ -602,21 +513,13 @@ def main():
                                   warmup_steps=args.d_warmup, warmup_lr=args.lr_d_warmup)
             else:
                 TG.Train_Single(o, dataloader, model_index=m, seed=base_seed + m)
+            last = last_epoch_for_model(tmp_ckpt, m)
+            shutil.copyfile(last, join(RESULT_DIR, f"generator_best_id{m}.pt"))
+            print(f"[save] model {m}: {os.path.basename(last)} -> synthetic_data/tailgan/generator_best_id{m}.pt")
         _np.save, _torch.save = _orig_np_save, _orig_torch_save
-
-        # ---- original TailGAN ensemble: screen by convergence, pick each survivor's best epoch ----
-        real_bct = train_windows_bct()
-        best = select_ensemble(TG, real_bct, tmp_ckpt, args.select_samples, o.numNN,
-                               args.screen_pct, TG.gen_data_path, metric=args.select,
-                               screen_by=args.screen_by)
-        for fp in glob.glob(join(RESULT_DIR, "generator_best*.pt")):
-            os.remove(fp)
-        os.makedirs(RESULT_DIR, exist_ok=True)
-        for m, p in best.items():
-            shutil.copyfile(p, join(RESULT_DIR, f"generator_best_id{m}.pt"))
         shutil.rmtree(tmp_ckpt, ignore_errors=True)
-        print(f"[run] ensemble: saved {len(best)} best generator(s) (select={args.select}, numNN={o.numNN})")
         weight_paths = sorted(glob.glob(join(RESULT_DIR, "generator_best_id*.pt")))
+        print(f"[run] trained {len(weight_paths)} models (final-epoch each, saved incrementally)")
     else:
         weight_paths = sorted(glob.glob(join(RESULT_DIR, "generator_best_id*.pt")))
         if not weight_paths:
@@ -626,10 +529,11 @@ def main():
         TG.opt.n_rows, TG.opt.n_cols = N_ROWS, N_COLS
         TG.R_shape = (N_ROWS, N_COLS)
         shutil.rmtree(join(TG_DIR, "your_path"), ignore_errors=True)
-        print(f"[run] 기존 앙상블 weight {len(weight_paths)}개 로드")
+        print(f"[run] 기존 모델 weight {len(weight_paths)}개 로드")
 
-    print(f"[run] 2000개 x {n_sets}묶음 생성 (앙상블 {len(weight_paths)}개 pooling)...")
-    generate_ensemble(TG, weight_paths, n_sets)
+    print(f"[run] {len(weight_paths)}개 모델 -> 모델당 2000개 배치 1개 생성 (pooling 없음)...")
+    generate_per_model(TG, weight_paths)
+
 
 
 if __name__ == "__main__":

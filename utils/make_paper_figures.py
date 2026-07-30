@@ -42,13 +42,18 @@ from matplotlib.ticker import MaxNLocator
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(_HERE)
 HELPERS = os.path.join(PROJECT, "result", "images", "figures")
-if HELPERS not in sys.path:
-    sys.path.insert(0, HELPERS)
 
-from make_figures import (ABL, ASSETS, C, DPI, EPS, MODELS, ROOT,  # noqa: E402
+# When this file is run as a script (the pnl worker subprocess does exactly that:
+# python utils/make_paper_figures.py --pnl-worker H), sys.path[0] is utils/, not the
+# repository root, so "import utils.*" below fails with "utils is not a package".
+# Put the project root on the path so the subprocess imports the same way a notebook does.
+if PROJECT not in sys.path:
+    sys.path.insert(0, PROJECT)
+
+from utils.make_figures import (ABL, ASSETS, C, DPI, EPS, MODELS, ROOT,  # noqa: E402
                           RV_WINDOW, ST, acf_batch, flat_windows, load_model,
                           load_real, read_pm_table, tag)
-from make_square_figures import COL_ABL, COL_BENCH, RISK, radar  # noqa: E402
+from utils.make_square_figures import COL_ABL, COL_BENCH, RISK, radar  # noqa: E402
 
 # the figures land directly under result/images
 OUT = os.path.join(PROJECT, "result", "images")
@@ -58,7 +63,7 @@ OUT = os.path.join(PROJECT, "result", "images")
 CACHE = os.path.join(HELPERS, "pnl_cache")
 os.makedirs(OUT, exist_ok=True)
 FULL, COL = 7.0, 3.33          # acmart sigconf: both columns, one column
-HS = [20, 40, 64, 96, 128, 160, 200, 255]
+HS = [20, 40, 64, 96, 128, 160, 200, 256]
 ALPHA = 0.05
 N_WIN = 400                    # scenarios per model where a subset suffices
 
@@ -92,10 +97,13 @@ SHORT = {"QuantGAN": "QuantGAN", "TailGAN": "Tail-GAN",
          "Diffusion-TS": "Diffusion-TS", "QuantDiffusion": "ours"}
 
 
-def relabel(ax, **kw):
+def relabel(ax, reverse=False, **kw):
     """Draw the legend with the paper's spelling of each model."""
     h, l = ax.get_legend_handles_labels()
-    ax.legend(h, [DISPLAY.get(x, x) for x in l], **kw)
+    l = [DISPLAY.get(x, x) for x in l]
+    if reverse:
+        h, l = h[::-1], l[::-1]
+    ax.legend(h, l, **kw)
 
 
 def order_models():
@@ -138,7 +146,7 @@ def comovement_windows(A):
     return np.nanmean(corr[:, iu[0], iu[1]], axis=1)
 
 
-def fig1(panel_c="tail", name="fig1_stylized_facts.png", outdir=OUT):
+def fig1(panel_c="cdf_tail", name="fig1_stylized_facts.png", outdir=OUT):
     """Panel (c) has four candidate forms, all of the same per scenario vector.
 
     tail      the one in use. Comovement on the vertical axis against how rare
@@ -203,14 +211,48 @@ def fig1(panel_c="tail", name="fig1_stylized_facts.png", outdir=OUT):
             [comovement_windows(load_model(MODELS[k], r)) for r in range(5)
              if load_model(MODELS[k], r) is not None])
 
-    if panel_c in ("cdf", "survival", "tail"):
+    if panel_c == "risk_cdf":
+        # RISK view: equal-weight portfolio cumulative log return per scenario (pooled
+        # over the 5 generated sets), as a CDF on a log vertical axis so the lower tail,
+        # the crisis losses that VaR and ES measure, opens up and each model's fit to the
+        # real loss tail is visible.
+        rc = {}
+        for k in series:
+            if k == "Real":
+                rc[k] = series[k].mean(axis=1).sum(axis=1)
+            else:
+                sets = [load_model(MODELS[k], r) for r in range(5)]
+                rc[k] = np.concatenate([s.mean(axis=1).sum(axis=1)
+                                        for s in sets if s is not None])
+        grid = np.linspace(0.002, 0.998, 400)
+        for k in series:
+            ax.plot(np.quantile(rc[k], grid), grid, color=C[k],
+                    lw=1.1 if k == "Real" else 0.75,
+                    ls="-" if k == "Real" else "--", zorder=3)
+        ax.set_yscale("log")
+        ax.set_ylim(2e-3, 1)
+        ax.set_yticks([1e-2, 1e-1, 1])
+        ax.set_yticklabels(["1%", "10%", "100%"])
+        ax.set_xlabel("portfolio return", fontsize=5.8, labelpad=0.8)
+        ax.set_ylabel("fraction below", fontsize=5.8, labelpad=1.2)
+    elif panel_c in ("cdf", "survival", "tail", "cdf_tail"):
         # drawn through a few hundred quantiles rather than all 10,000 points,
         # which is the same curve at a fraction of the file size
-        grid = np.linspace(0.0, 1.0 if panel_c == "cdf" else 0.99, 400)
+        top = 1.0 if panel_c == "cdf" else 0.995 if panel_c == "cdf_tail" else 0.99
+        grid = np.linspace(0.0, top, 400)
         for k in series:
             q = np.quantile(m[k], grid)
-            xy = (q, grid) if panel_c == "cdf" else \
-                 (q, 1.0 - grid) if panel_c == "survival" else (1.0 - grid, q)
+            if panel_c == "cdf":
+                xy = (q, grid)
+            elif panel_c == "survival":
+                xy = (q, 1.0 - grid)
+            elif panel_c == "cdf_tail":
+                # CDF with the upper tail stretched: y = -log10(1 - F), so the
+                # crisis end (F -> 1, high comovement) opens up and each model's
+                # fit there is visible, while the bulk compresses toward the axis
+                xy = (q, -np.log10(1.0 - grid + 1e-12))
+            else:
+                xy = (1.0 - grid, q)
             ax.plot(*xy, color=C[k], lw=1.1 if k == "Real" else 0.75,
                     ls="-" if k == "Real" else "--", zorder=3)
         if panel_c == "cdf":
@@ -229,6 +271,14 @@ def fig1(panel_c="tail", name="fig1_stylized_facts.png", outdir=OUT):
             ax.set_yticklabels(["1%", "10%", "100%"])
             ax.set_xlabel("comovement", fontsize=5.8, labelpad=0.8)
             ax.set_ylabel("scenarios above", fontsize=5.8, labelpad=1.2)
+        elif panel_c == "cdf_tail":
+            ax.set_xlim(-0.05, 0.85)
+            ax.set_xticks([0.0, 0.4, 0.8])
+            ax.set_yticks([-np.log10(1 - v) for v in (0.5, 0.9, 0.99)])
+            ax.set_yticklabels(["50%", "90%", "99%"])
+            ax.set_ylim(0, 2.35)
+            ax.set_xlabel("comovement", fontsize=5.8, labelpad=0.8)
+            ax.set_ylabel("CDF", fontsize=5.8, labelpad=1.2)
         else:
             # rarity increases to the right, so the crisis end of the market is
             # the right hand edge and the curve rises into it
@@ -261,7 +311,8 @@ def fig1(panel_c="tail", name="fig1_stylized_facts.png", outdir=OUT):
         ax.set_ylim(0, 0.88)
         ax.set_yticks([0.0, 0.4, 0.8])
         ax.set_xlabel("comovement", fontsize=5.8, labelpad=0.8)
-    ax.set_title(r"Corr$(x_i, x_j)$", pad=2.0, fontsize=6.4)
+    ax.set_title("Risk CDF" if panel_c == "risk_cdf" else r"Corr$(x_i, x_j)$",
+                 pad=2.0, fontsize=6.4)
     ax.tick_params(labelsize=5.4, pad=1.2)
     ax.grid(axis="y")
     ax.set_axisbelow(True)
@@ -349,17 +400,17 @@ def fig3():
     fig = plt.figure(figsize=(COL, 4.55))
     for idx, (mean, cols, keys, title, letter) in enumerate([
             (bm, COL_BENCH, ORDER, "benchmark", "a"),
-            (ab, COL_ABL, list(COL_ABL), "ablation", "b")]):
+            (ab, COL_ABL, ["w/o Lambert W", "w/o DMS-TCN", "w/o RV", "Full"], "ablation", "b")]):
         present = {k: cols[k] for k in keys
                    if k in cols and cols[k] in mean.columns}
         vals = {m: {k: mean.loc[k, c] for k, _ in RISK}
                 for m, c in present.items()}
         ax = fig.add_subplot(2, 1, idx + 1, projection="polar")
-        radar(ax, RISK, vals, list(present), fmt="{:.3f}", note=False)
+        radar(ax, RISK, vals, list(present), fmt="{:.3f}", note=False, gamma=0.55)
         ax.set_ylim(0, 1.17)           # tighter than the default outer margin
         for t in ax.get_xticklabels():
             t.set_fontsize(6.0)
-        relabel(ax, loc="upper left", bbox_to_anchor=(-0.24, 1.12),
+        relabel(ax, reverse=True, loc="upper left", bbox_to_anchor=(-0.24, 1.12),
                 fontsize=5.6, handlelength=0.9, labelspacing=0.2,
                 handletextpad=0.4)
         ax.text(-0.26, 1.10, f"({letter})", transform=ax.transAxes,
@@ -376,87 +427,127 @@ def fig3():
 # ==========================================================================
 # fig 4: risk error at every horizon
 # ==========================================================================
-def _cache_path(h, k):
-    return os.path.join(CACHE, f"h{h}_{k}.npy")
+# fig4 must equal Table portfolio_risk at its terminal horizon, so it is computed
+# on the same five tracked OOS baskets (data/tailgan_basket) and five seeds.
+_FIG_LIVE_IS = os.path.join(PROJECT, "data", "TailGAN", "Static_Port_Transform",
+                            "LShort_Stk6", "TransMat_IS.npy")
+_FIG_BASKET_DIR = os.path.join(PROJECT, "data", "tailgan_basket")
+N_BASKETS = 5
+N_SEEDS = 5
+# the 68 Compute_PNL columns in order: BuyHold[0:6], static portfolios[6:56],
+# mean reversion[56:62], trend following[62:68]. "all" is what fig4 reports;
+# the three named strategies are the columns of fig6.
+_STRATS = {"all": slice(None), "Port": slice(6, 56),
+           "MR": slice(56, 62), "TF": slice(62, 68)}
+
+
+def _cache_path(h, b):
+    return os.path.join(CACHE, f"h{h}_b{b}_re.npy")
 
 
 def pnl_worker(h):
-    """Compute_PNL at one horizon, saving each series the moment it is done.
+    """VaR/ES relative error at one horizon, computed exactly as Table
+    portfolio_risk. For each of the five tracked OOS baskets the basket is copied
+    into the live slot Compute_PNL reads; real and every seed batch are truncated
+    to [:h] and scored with the same tailgan_eval.relerror the table uses; the per
+    basket mean over the five seeds is cached as h{h}_b{b}_re.npy.
 
-    TailGAN's CPU path corrupts the heap somewhere inside Compute_PNL. The P&L
-    values come out correct, then the process dies with an access violation at
-    whatever allocates next, which is why the crash moved between horizons and
-    once landed inside np.savez_compressed with every number already computed.
-    There is no way to catch that, so nothing is kept in memory: each series is
-    written as its own uncompressed .npy as soon as it exists, the worker leaves
-    through os._exit to skip teardown, and a rerun resumes from what survived.
+    Compute_PNL can die inside the interpreter, so each basket is written the
+    moment it is done and a rerun resumes from what survived; the worker leaves
+    through os._exit to skip teardown. The live basket is restored on the way out.
     """
+    import shutil as _sh
     sys.path.insert(0, os.path.join(ROOT, "modules", "TailGAN"))
     import tailgan_eval as TE
 
     TG = TE.configure_from_project(ROOT)
     real, _ = load_real()
-    series = {"real": real[:, :, :h]}
+    seeds = {}
     for m, t in MODELS.items():
-        a = load_model(t)
-        if a is not None:
-            series[m] = a[:N_WIN, :, :h]
+        arrs = [load_model(t, s) for s in range(N_SEEDS)]
+        arrs = [a for a in arrs if a is not None]
+        if arrs:
+            seeds[m] = arrs
+
+    def pnl(A):                          # whole batch at once, like vares_relerror
+        return TG.Compute_PNL(
+            TG.Tensor(np.asarray(A[:, :, :h], dtype=np.float32))).cpu().detach().numpy()
 
     os.makedirs(CACHE, exist_ok=True)
-    for k, A in series.items():
-        p = _cache_path(h, k)
-        if os.path.exists(p):
-            continue                     # a previous worker already got this one
-        parts = []
-        for i in range(0, A.shape[0], 100):
-            X = np.ascontiguousarray(A[i:i + 100], dtype=np.float32)
-            parts.append(TG.Compute_PNL(TG.Tensor(X)).cpu().detach().numpy())
-        arr = np.concatenate(parts, axis=0)
-        tmp = p + ".partial"
-        with open(tmp, "wb") as fh:      # write then rename, never a half file
-            np.save(fh, arr)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, p)
-        print(f"    h={h} {k}: {arr.shape} cached", flush=True)
+    bak = _FIG_LIVE_IS + ".figbak"
+    if not os.path.exists(bak):          # keep the first (real reference) backup
+        _sh.copyfile(_FIG_LIVE_IS, bak)
+    try:
+        for b in range(N_BASKETS):
+            p = _cache_path(h, b)
+            if os.path.exists(p):
+                continue
+            _sh.copyfile(os.path.join(_FIG_BASKET_DIR, f"basket{b}",
+                                      "TransMat_OOS.npy"), _FIG_LIVE_IS)
+            rp = pnl(real)
+            assert rp.shape[1] == 68, f"expected 68 P&L columns, got {rp.shape[1]}"
+            out = {st: {} for st in _STRATS}
+            for m, arrs in seeds.items():
+                acc = {st: [[], []] for st in _STRATS}
+                for a in arrs:
+                    fp = pnl(a)
+                    for st, cols in _STRATS.items():
+                        d = TE.relerror(rp[:, cols], fp[:, cols], (ALPHA,))
+                        acc[st][0].append(d[f"RE_VaR({ALPHA})"])
+                        acc[st][1].append(d[f"RE_ES({ALPHA})"])
+                for st in _STRATS:
+                    out[st][m] = [float(np.mean(acc[st][0])),
+                                  float(np.mean(acc[st][1]))]
+            tmp = p + ".partial"
+            with open(tmp, "wb") as fh:  # write then rename, never a half file
+                np.save(fh, np.array(out, dtype=object), allow_pickle=True)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, p)
+            print(f"    h={h} basket{b}: {list(out)} cached", flush=True)
+    finally:
+        _sh.copyfile(bak, _FIG_LIVE_IS)
+        os.remove(bak)
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
 
 
-def pnl_cached(h, tries=14):
-    """Load one horizon's P&L, spawning workers until every series is cached.
+def pnl_cached(h, tries=20):
+    """Relative error per model at horizon h, averaged over the five baskets.
 
-    A worker usually finishes several series before the heap catches up with it,
-    so the retry count only has to exceed the number of series. The long horizons
-    crash soonest and need the most attempts.
+    Spawns the worker until every basket is cached, restores the live basket if a
+    crashed worker left it swapped, then averages the per basket means so the
+    terminal horizon equals Table portfolio_risk.
     """
-    keys = ["real"] + list(MODELS)
     for _ in range(tries):
-        missing = [k for k in keys if not os.path.exists(_cache_path(h, k))]
+        missing = [b for b in range(N_BASKETS) if not os.path.exists(_cache_path(h, b))]
         if not missing:
             break
-        print(f"  h={h}: {len(missing)} series to compute")
+        print(f"  h={h}: {len(missing)} baskets to compute")
         subprocess.run([sys.executable, os.path.abspath(__file__),
                         "--pnl-worker", str(h)], check=False, cwd=PROJECT)
-    out = {k: np.load(_cache_path(h, k)) for k in keys
-           if os.path.exists(_cache_path(h, k))}
-    if "real" not in out:
-        raise RuntimeError(f"no real P&L at h={h}; delete {CACHE} and retry")
+    bak = _FIG_LIVE_IS + ".figbak"
+    if os.path.exists(bak):              # a crashed worker left the slot swapped
+        import shutil as _sh
+        _sh.copyfile(bak, _FIG_LIVE_IS)
+        os.remove(bak)
+    per_basket = [np.load(_cache_path(h, b), allow_pickle=True).item()
+                  for b in range(N_BASKETS) if os.path.exists(_cache_path(h, b))]
+    if not per_basket:
+        raise RuntimeError(f"no P&L at h={h}; delete {CACHE} and retry")
+    out = {}
+    for st in per_basket[0]:
+        out[st] = {}
+        for m in per_basket[0][st]:
+            out[st][m] = (float(np.mean([d[st][m][0] for d in per_basket])),
+                          float(np.mean([d[st][m][1] for d in per_basket])))
     return out
 
 
-def re_at(pr, pf, alpha, row):
-    import tailgan_eval as TE
-    rv = TE.empirical_var_es(pr, alpha)[row]
-    fv = TE.empirical_var_es(pf, alpha)[row]
-    return float(np.nanmean(np.abs(rv - fv) / (np.abs(rv) + EPS)))
-
-
 def fig4():
-    sys.path.insert(0, os.path.join(ROOT, "modules", "TailGAN"))
     pnl = {h: pnl_cached(h) for h in HS}
-    order = [m for m in order_models() if m in pnl[HS[0]]]
+    order = [m for m in order_models() if m in pnl[HS[0]]["all"]]
 
     fig, axes = plt.subplots(2, 1, figsize=(COL, 2.42), sharex=True)
     fig.subplots_adjust(left=0.165, right=0.985, top=0.815, bottom=0.155,
@@ -464,7 +555,7 @@ def fig4():
     for ax, row, lab in zip(axes, (0, 1),
                             [r"RE$_{\mathrm{VaR}}$", r"RE$_{\mathrm{ES}}$"]):
         for m in order:
-            y = [re_at(pnl[h]["real"], pnl[h][m], ALPHA, row) for h in HS]
+            y = [pnl[h]["all"][m][row] for h in HS]
             ax.plot(HS, y, color=C[m], lw=1.2 if m == "QuantDiffusion" else 0.8,
                     marker="o", ms=1.9, mew=0, label=m, zorder=3)
         ax.set_ylabel(f"{lab} ({ALPHA})", fontsize=6.2, labelpad=1.5)
@@ -561,7 +652,52 @@ def _fig5_unused():
 
 
 # ==========================================================================
-FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5}
+# fig 6: fig4 resolved per trading strategy
+# ==========================================================================
+def fig6():
+    """The fig4 horizon curves resolved by trading strategy: static portfolios,
+    mean reversion and trend following as three columns, RE of VaR above and RE of
+    ES below, each averaged over the same five baskets and five seeds so a column
+    at the terminal horizon is the strategy's own entry in the risk table.
+    """
+    pnl = {h: pnl_cached(h) for h in HS}
+    cols = [("Port", "Static portfolios"), ("MR", "Mean reversion"),
+            ("TF", "Trend following")]
+    order = [m for m in order_models() if m in pnl[HS[0]]["all"]]
+
+    fig, axes = plt.subplots(2, 3, figsize=(FULL, 2.7), sharex=True)
+    fig.subplots_adjust(left=0.072, right=0.99, top=0.80, bottom=0.135,
+                        hspace=0.14, wspace=0.24)
+    rows = [(0, r"RE$_{\mathrm{VaR}}$"), (1, r"RE$_{\mathrm{ES}}$")]
+    for j, (skey, sname) in enumerate(cols):
+        for i, (row, lab) in enumerate(rows):
+            ax = axes[i][j]
+            for m in order:
+                y = [pnl[h][skey][m][row] for h in HS]
+                ax.plot(HS, y, color=C[m],
+                        lw=1.2 if m == "QuantDiffusion" else 0.8,
+                        marker="o", ms=1.9, mew=0, label=m, zorder=3)
+            ax.yaxis.set_major_locator(MaxNLocator(4))
+            ax.tick_params(labelsize=5.4, pad=1.2)
+            ax.grid(axis="y")
+            ax.set_axisbelow(True)
+            ax.set_ylim(bottom=0)
+            if i == 0:
+                ax.set_title(sname, fontsize=6.8, pad=2.5)
+            if j == 0:
+                ax.set_ylabel(f"{lab} ({ALPHA})", fontsize=6.2, labelpad=1.5)
+        axes[1][j].set_xlabel(r"horizon $h$ (trading days)",
+                              fontsize=6.0, labelpad=1.2)
+    relabel(axes[0][1], ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.14),
+            frameon=True, fancybox=False, edgecolor="#8A8A8A",
+            facecolor="white", framealpha=1.0, fontsize=5.2,
+            handlelength=0.9, handletextpad=0.3, columnspacing=0.7,
+            borderpad=0.25, borderaxespad=0.0)
+    save(fig, "fig6_risk_horizon_strategies.png")
+
+
+# ==========================================================================
+FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6}
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--pnl-worker":

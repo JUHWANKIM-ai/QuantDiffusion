@@ -228,8 +228,8 @@ restored from `data/tailgan_basket/`. No separate step is required.
 > `scipy.sparse.random` is not guaranteed stable across scipy versions. The reported risk numbers reproduce
 > only against this basket. Replacing it is a deliberate act, and every number in the tables moves with it.
 
-**5. Figures & data check.** `3_visualization.ipynb` saves ACF / correlation / histogram figures to
-`result/images/` and cross-checks the CRSP dataset against yfinance.
+**5. Figures & data check.** `3_visualization.ipynb` renders the paper figures via `utils.make_paper_figures`
+(`pf.fig1()` .. `pf.fig4()`) into `result/images/`, and cross-checks the CRSP dataset against yfinance.
 
 The five figures the paper uses are separate, built by `utils/make_paper_figures.py` straight into
 `result/images/`, sized for `acmart` sigconf (3.33 in for one column, 7.0 in across both) at 400 dpi. Section
@@ -275,7 +275,8 @@ quantDiffusion/
 ├── models/                  # DMS_TCN.py (DMSTCN), quantTCN.py
 ├── modules/                 # diffusion.py + baselines (QuantGAN, TailGAN, diffusionTS)
 │   └── TailGAN/tailgan_eval.py    # portfolio VaR/ES metric + ensure_static_basket
-├── utils/                   # metric.py, file_manager.py, gaussianize.py, ANT_utils.py, ...
+├── utils/                   # metric.py, file_manager.py, gaussianize.py, ANT_utils.py,
+│                           #   make_paper_figures.py + make_figures.py + make_square_figures.py (paper figures)
 ├── data/                    # indices.csv (CRSP), RV/, tailgan_basket/ (the evaluation basket),
 │                            #   TailGAN/ (auto-built by the notebooks)
 └── result/
