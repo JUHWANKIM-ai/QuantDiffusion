@@ -1,15 +1,14 @@
 # QuantDiffusion (ICAIF 2026)
 
-This is the official implementation of the paper: **QuantDiffusion: Multivariate Financial Scenario
-Generation for Portfolio Risk Assessment via Realized Volatility Decomposition**.
+This is the official implementation of the paper: **QuantDiffusion: Deep Generation of Multivariate
+Financial Scenarios for Portfolio Risk Assessment**.
 
 ---
 
 ## Our Paper
 
-*QuantDiffusion: Multivariate Financial Scenario Generation for Portfolio Risk Assessment via Realized
-Volatility Decomposition.* In the 7th ACM International Conference on AI in Finance (ICAIF), 2026.
-Author list withheld for review.
+*QuantDiffusion: Deep Generation of Multivariate Financial Scenarios for Portfolio Risk Assessment.*
+In the 7th ACM International Conference on AI in Finance (ICAIF), 2026. Author list withheld for review.
 
 We study how to make **denoising diffusion models** generate realistic multivariate financial return
 scenarios for risk-sensitive tasks (stress testing, deep hedging, Value-at-Risk / Expected Shortfall
@@ -20,9 +19,8 @@ diffusion models are intrinsically SDEs but fail to model ordinary and tail even
 diffusion training as **Langevin dynamics**, we show that a stochastic-volatility process leaves a Brownian
 footprint indistinguishable from the injected diffusion noise, and we remove this conflation by extracting the
 volatility component **before** training. The resulting model stays coherent with a **stochastic volatility
-jump diffusion (SVJD)** reading of returns, and consistently improves cross-asset dependence, marginal
-distributions across horizons, volatility clustering, and portfolio-level VaR/ES over state-of-the-art
-baselines.
+jump diffusion (SVJD)** reading of returns, and improves cross-asset dependence, marginal distributions
+across horizons, volatility clustering, and portfolio-level VaR/ES over state-of-the-art baselines.
 
 **Contributions.**
 1. The first to connect diffusion-model training with the SDE representation of financial time series, and a
@@ -30,7 +28,8 @@ baselines.
 2. An SDE-level (Itô-based) treatment of the **Lambert *W*** Gaussianization that isolates the jump component
    and restores stochastic-process interpretability, supporting the SVJD specification a posteriori.
 3. A **DMS-TCN** backbone with dilated causal convolutions and parallel large/small-kernel branches for local
-   and long-horizon dependence, with markedly lower portfolio VaR/ES error.
+   and long-horizon dependence, which lowers portfolio VaR/ES error by up to 22.4% relative to the variant
+   without it.
 
 ## QuantDiffusion Pipeline
 
@@ -41,14 +40,14 @@ only ever sees the components:
 Real returns  r ∈ R^{n×T}
       │   RV decomposition:  r_t = z_t · √RV_t     (RV = 10-day close-to-close realized variance)
       ▼
-   (z, RV) ∈ R^{2n×T}
-      │   Normalize  →  inverse Lambert W (Gaussianize z)  →  Normalize
+   (z, log RV) ∈ R^{2n×T}
+      │   Normalize  →  inverse Lambert W (Gaussianize)  →  Normalize
       ▼
-   Forward noising  q(x_t | x_{t-1})           DDPM, Student-t prior, cosine (ANT) schedule
+   Forward noising  q(x_t | x_{t-1})           DDPM, Gaussian noise, cosine schedule
       │   Reverse  p_θ(x_{t-1} | x_t)           score network = DMS-TCN
       ▼
-   (ẑ, R̂V)  →  Denormalize → Lambert W → Denormalize
-      │   Recomposition:  r̂_t = ẑ_t · √R̂V_t
+   (ẑ, log R̂V)  →  Denormalize → Lambert W → Denormalize
+      │   Recomposition:  r̂_t = ẑ_t · exp(log R̂V_t)
       ▼
 Synthetic returns  r̂ ∈ R^{n×T}
 ```
@@ -58,105 +57,146 @@ Synthetic returns  r̂ ∈ R^{n×T}
   `r = z·√RV` mirrors a Student-*t* variate, realizing a **dynamic Student-*t*** with a learned scale process.
 - **Lambert *W*** Gaussianization tames the heavy tail of `z`; being `C²` and invertible, it acts at the SDE
   level (suppressing the jump term) rather than as a preprocessing heuristic.
-- **DMS-TCN** (`models/DMS_TCN.py`, class `DMSTCN`): large-kernel branch (dilations `[1, 4, 16]`) + small-kernel
-  branch, fused for multi-scale temporal structure.
-- **Noise structure**: `ℓ1` loss, Student-*t* prior, cosine schedule (`τ=1.5`, `β∈[1e-5, 0.5]`, `T=75`, 45 epochs).
+- **DMS-TCN** (`models/DMS_TCN.py`, class `DMSTCN`): large-kernel branch (kernels `[15, 7, 5]`, dilations
+  `[1, 4, 16]`) + small-kernel branch (`[5, 5, 5]`, dilation 1), fused for multi-scale temporal structure;
+  `dims = [128, 128, 128]`, sinusoidal time embedding, no cross-attention.
+- **Diffusion**: Gaussian DDPM, `ε`-prediction, smooth-`ℓ1` loss, cosine schedule (`τ=1.5`,
+  `β∈[1e-5, 0.5]`, `T=75`), EMA `0.9999`. Trained 45 epochs, Adam `lr=2e-4`, `weight_decay=1e-5`, batch 256.
+  The checkpoint is the epoch with the lowest 100-day EMD against the training data.
+  (`modules/diffusion.py` also implements Student-*t* and joint Student-*t* forward noise; the reported model
+  uses `sampling_type="gaussian"`.)
 
 ## Main Results
 
-Real daily returns for six assets (DJIA, Nasdaq, JP Morgan, Hang Seng, Gold, WTI crude), 2001–2025, evaluated
-against **QuantGAN, Tail-GAN, and Diffusion-TS**.
+Real daily returns for six assets (DJIA, Nasdaq, JP Morgan, Hang Seng, Gold, WTI crude),
+2001-01-02 to 2025-12-30, evaluated against **QuantGAN, Tail-GAN, and Diffusion-TS**. Each model draws
+five batches of 2,000 scenarios in `R^{6×256}`, one per seed. Fidelity entries are the mean ± std over the
+five seeds; risk entries are scored on ten evaluation baskets and reported as the mean ± std over the
+ten per-basket values (each already averaged over the five seeds).
 
-![Relative error of portfolio Value at Risk and Expected Shortfall, against the baselines and across the ablation variants. Each axis is scaled so that further from the centre is better.](result/images/fig3_risk_radars.png)
+![Relative error of portfolio Value at Risk and Expected Shortfall, against the baselines and across the ablation variants. Further from the centre is better.](result/images/fig3_risk_radars.png)
 
 Best in **bold**, second best in *italic*; lower is better. Every number below is read straight out of
 `result/statistics/*.csv`, which the notebooks regenerate.
 
 ### Statistical fidelity
 
-| Metric | QuantGAN | Tail-GAN | Diffusion-TS | QuantDiffusion |
+| Metric | QuantDiffusion | QuantGAN | Tail-GAN | Diffusion-TS |
 |---|---|---|---|---|
-| CCF(τ=0) | 0.0968 | 0.1822 | **0.0533** | *0.0572* |
-| CCF(τ>0) | 0.0569 | 0.0798 | *0.0367* | **0.0341** |
-| Vol CCF(τ=0) | 0.1409 | 0.3072 | **0.0631** | *0.0818* |
-| KS(1) | *0.0402* | 0.1482 | 0.0948 | **0.0375** |
-| KS(5) | *0.0529* | 0.1195 | 0.1141 | **0.0418** |
-| KS(20) | *0.0785* | 0.1620 | 0.1335 | **0.0530** |
-| KS(100) | *0.1404* | 0.2603 | 0.1912 | **0.1403** |
-| Skew(1) | 0.4560 | 0.2700 | **0.1507** | *0.1582* |
-| Skew(5) | 0.3424 | 0.4445 | **0.1436** | *0.3335* |
-| Skew(20) | *0.2277* | 0.4584 | **0.2043** | 0.3380 |
-| Skew(100) | **0.0853** | 0.3290 | *0.0955* | 0.1199 |
-| Kurt(1) | 5.1508 | 4.6610 | *2.9343* | **0.7942** |
-| Kurt(5) | *0.9097* | 1.0891 | 1.0401 | **0.8688** |
-| Kurt(20) | *0.5001* | 0.5923 | 0.6869 | **0.2287** |
-| Kurt(100) | 0.2678 | 0.6255 | *0.2555* | **0.2037** |
-| ACF(x) | 0.0012 | 0.0033 | **0.0007** | *0.0008* |
-| ACF(\|x\|) | *0.0038* | 0.0059 | 0.0041 | **0.0015** |
-| ACF(x²) | *0.0023* | 0.0037 | 0.0023 | **0.0009** |
-| Leverage | *0.0011* | 0.0037 | 0.0012 | **0.0007** |
+| CCF(τ=0) | *0.0533* | 0.1260 | 0.1930 | **0.0529** |
+| CCF(τ>0) | *0.0365* | 0.0919 | 0.0804 | **0.0355** |
+| Vol CCF(τ=0) | *0.0909* | 0.2313 | 0.3273 | **0.0604** |
+| KS(1) | **0.0378** | *0.0490* | 0.1515 | 0.1059 |
+| KS(5) | **0.0459** | *0.0709* | 0.1257 | 0.1232 |
+| KS(20) | **0.0618** | *0.1181* | 0.1489 | 0.1533 |
+| KS(100) | **0.1626** | *0.2130* | 0.2695 | 0.2251 |
+| Skew(1) | *0.1993* | 0.7088 | 0.2423 | **0.1254** |
+| Skew(5) | 0.3866 | 0.4150 | *0.3434* | **0.1693** |
+| Skew(20) | 0.3753 | *0.2851* | 0.3486 | **0.2282** |
+| Skew(100) | 0.1157 | **0.0752** | 0.2651 | *0.0959* |
+| Kurt(1) | **0.7085** | 3.1378 | 4.7732 | *2.9523* |
+| Kurt(5) | *1.0368* | **0.8554** | 1.5584 | 1.0709 |
+| Kurt(20) | **0.2621** | *0.5771* | 0.7279 | 0.6937 |
+| Kurt(100) | **0.1872** | *0.2240* | 0.3748 | 0.2538 |
+| ACF(x) | *0.0009* | 0.0044 | 0.0029 | **0.0007** |
+| ACF(\|x\|) | **0.0016** | 0.0047 | 0.0060 | *0.0041* |
+| ACF(x²) | **0.0009** | 0.0028 | 0.0037 | *0.0023* |
+| Leverage | **0.0008** | 0.0016 | 0.0033 | *0.0013* |
 
-### Portfolio risk (relative error over four trading strategies)
+QuantDiffusion is best on 10 of the 19 fidelity metrics and top-2 on 16. Diffusion-TS leads on all three
+cross correlation rows and on three of the four skewness horizons; QuantDiffusion leads on every KS horizon,
+on kurtosis at `h ∈ {1, 20, 100}`, and on all three clustering metrics.
 
-| Metric | QuantGAN | Tail-GAN | Diffusion-TS | QuantDiffusion |
+### Portfolio risk, out of sample (real = test split)
+
+| Metric | QuantDiffusion | QuantGAN | Tail-GAN | Diffusion-TS |
 |---|---|---|---|---|
-| RE VaR(0.05) | *0.4468* | 0.4604 | 0.6333 | **0.3815** |
-| RE VaR(0.025) | 0.4925 | *0.4320* | 0.5434 | **0.3525** |
-| RE VaR(0.01) | 0.5412 | *0.3899* | 0.4790 | **0.3566** |
-| RE ES(0.05) | 0.5126 | *0.4020* | 0.5195 | **0.3507** |
-| RE ES(0.025) | 0.5693 | *0.3895* | 0.4670 | **0.3455** |
-| RE ES(0.01) | 0.6627 | *0.3752* | 0.4168 | **0.3533** |
+| RE VaR(0.05) | **0.3767** | *0.4673* | 0.5306 | 0.6590 |
+| RE VaR(0.025) | **0.3572** | *0.4286* | 0.4808 | 0.5525 |
+| RE VaR(0.01) | **0.3685** | 0.4343 | *0.4329* | 0.4771 |
+| RE ES(0.05) | **0.3555** | *0.4326* | 0.4556 | 0.5271 |
+| RE ES(0.025) | **0.3598** | *0.4382* | 0.4451 | 0.4729 |
+| RE ES(0.01) | **0.3779** | 0.4600 | 0.4631 | *0.4294* |
 
-QuantDiffusion is best on 12 of 19 fidelity metrics and top-2 on 17, and it attains the smallest VaR/ES error
-at every confidence level, staying nearly flat rather than degrading deeper into the tail.
+QuantDiffusion attains the smallest error at every confidence level, improving on the best baseline of each
+entry by 19.4% / 16.7% / 14.9% on VaR and 17.8% / 17.9% / 12.0% on ES.
 
-Tail-GAN is the informative comparison. Its quantile based adversarial objective makes it the second best model
-on five of the six risk entries, and the only baseline whose VaR error *falls* as the confidence level tightens
-(0.4604 → 0.4320 → 0.3899), yet it is the weakest of the four on cross correlation, on KS, and on every
-clustering metric. Distributional fidelity and tail risk fidelity are distinct objectives, and QuantDiffusion is
-the only model here that leads on both.
+### Portfolio risk, in sample (real = train split)
+
+| Metric | QuantDiffusion | QuantGAN | Tail-GAN | Diffusion-TS |
+|---|---|---|---|---|
+| RE VaR(0.05) | 0.4120 | *0.4081* | **0.1433** | 0.5055 |
+| RE VaR(0.025) | 0.4138 | *0.3838* | **0.1573** | 0.4633 |
+| RE VaR(0.01) | 0.3944 | *0.3693* | **0.1882** | 0.4154 |
+| RE ES(0.05) | 0.3961 | *0.3787* | **0.1655** | 0.4423 |
+| RE ES(0.025) | 0.3827 | *0.3695* | **0.1945** | 0.4153 |
+| RE ES(0.01) | *0.3549* | 0.3667 | **0.2315** | 0.3886 |
+
+Tail-GAN is the informative comparison. Its adversarial objective *is* the quantile loss of the risk
+statistics, so in sample it dominates every model by a wide margin. None of that survives out of sample: it
+buys second place at `α = 0.01` on VaR and nothing further, while remaining the weakest of the four on
+kurtosis, on the volatility cross correlation, and on every clustering metric. Distributional fidelity and
+tail-risk fidelity are distinct objectives, and QuantDiffusion is the only model here that leads on both.
+
+### Risk across horizons and strategies
+
+`fig4` reads the same relative error at every horizon `h ∈ {20, 40, 64, 96, 128, 160, 200, 256}`, pooled over
+the 68 P&L columns `Compute_PNL` produces; `h = 256` reproduces the table above. QuantDiffusion is lowest at
+every horizon on both VaR and ES. `fig6` resolves the same errors into the four strategy blocks (buy and hold
+`n=6`, static portfolios `n=50`, mean reversion `n=6`, trend following `n=6`); averaged over horizons,
+QuantDiffusion is lowest in all eight cells.
 
 ### Ablation
 
-Removing one component at a time (best in **bold**, second best *italic*; lower is better).
+Removing one component at a time from the full model (best in **bold**, second best *italic*; lower is
+better). The tags are `baseline`, `a2_wo_rv`, `a2_wo_lambertw`, `a2_wo_moderntcn`, `a2_wo_l1`, `a2_wo_cosine`.
 
-**Statistical fidelity**
+**Portfolio risk, out of sample**
 
-| Metric | Full | w/o RV Decomp. | w/o Lambert W | w/o DMS-TCN |
-|---|---|---|---|---|
-| CCF(τ=0)  | 0.0572 | *0.0524* | 0.0709 | **0.0390** |
-| CCF(τ>0)  | *0.0341* | 0.0342 | 0.0420 | **0.0276** |
-| Vol CCF(τ=0) | *0.0818* | 0.1432 | 0.1151 | **0.0568** |
-| KS(1)     | 0.0375 | **0.0328** | 0.0379 | *0.0342* |
-| KS(5)     | **0.0418** | 0.0446 | 0.0437 | *0.0424* |
-| KS(20)    | **0.0530** | 0.0647 | *0.0622* | 0.0660 |
-| KS(100)   | 0.1403 | **0.1300** | 0.1722 | *0.1399* |
-| Skew(1)   | 0.1582 | **0.0845** | *0.1520* | 0.1920 |
-| Skew(5)   | 0.3335 | *0.2032* | 0.3393 | **0.1076** |
-| Skew(20)  | 0.3380 | *0.2143* | 0.3579 | **0.1616** |
-| Skew(100) | 0.1199 | **0.0818** | 0.1155 | *0.0893* |
-| Kurt(1)   | *0.7942* | 1.6739 | 0.8877 | **0.7817** |
-| Kurt(5)   | 0.8688 | *0.4753* | 0.9116 | **0.4427** |
-| Kurt(20)  | **0.2287** | 0.5363 | *0.2997* | 0.3646 |
-| Kurt(100) | *0.2037* | 0.2313 | **0.1690** | 0.2536 |
-| ACF(x)    | *0.0008* | 0.0008 | 0.0009 | **0.0007** |
-| ACF(\|x\|) | **0.0015** | 0.0039 | 0.0021 | *0.0018* |
-| ACF(x²)   | **0.0009** | 0.0024 | *0.0012* | 0.0012 |
-| Leverage  | **0.0007** | 0.0010 | *0.0009* | 0.0010 |
+| Metric | Full | w/o RV Decomp. | w/o Lambert W | w/o DMS-TCN | w/o L1 loss | w/o cosine |
+|---|---|---|---|---|---|---|
+| RE VaR(0.05) | **0.3767** | 0.6764 | 0.3845 | 0.4857 | *0.3813* | 0.4351 |
+| RE VaR(0.025) | **0.3572** | 0.6428 | 0.3661 | 0.4506 | *0.3646* | 0.4026 |
+| RE VaR(0.01) | **0.3685** | 0.6226 | 0.3780 | 0.4414 | *0.3745* | 0.3916 |
+| RE ES(0.05) | **0.3555** | 0.6357 | 0.3660 | 0.4462 | *0.3611* | 0.3941 |
+| RE ES(0.025) | **0.3598** | 0.6170 | 0.3706 | 0.4306 | *0.3653* | 0.3777 |
+| RE ES(0.01) | *0.3779* | 0.5933 | 0.3834 | 0.4092 | 0.3843 | **0.3603** |
 
-**Portfolio risk**
+Relative to the full model: removing the RV decomposition costs **57.0% to 79.9%**, removing the DMS-TCN
+backbone **21.4% on average**, the linear schedule **5.0% to 15.5%** on five of six entries, the Lambert *W*
+transform **1.5% to 3.0%**, and `ℓ2` in place of smooth-`ℓ1` **1.6% on average**. The one entry the full model
+does not win is `RE ES(0.01)`, where the linear schedule is lower; over the ten baskets the full model is best
+on that entry in one, so the gap belongs to the schedule rather than to the basket draw.
 
-| Metric | Full | w/o RV Decomp. | w/o Lambert W | w/o DMS-TCN |
-|---|---|---|---|---|
-| RE VaR(0.05) | **0.3815** | 0.6578 | *0.4271* | 0.4299 |
-| RE VaR(0.025) | **0.3525** | 0.6372 | *0.3969* | 0.4115 |
-| RE VaR(0.01) | **0.3566** | 0.6313 | *0.3984* | 0.4175 |
-| RE ES(0.05) | **0.3507** | 0.6338 | *0.3956* | 0.4113 |
-| RE ES(0.025) | **0.3455** | 0.6221 | *0.3857* | 0.4053 |
-| RE ES(0.01) | **0.3533** | 0.6009 | *0.3776* | 0.3936 |
+**Statistical fidelity** (reported for completeness; the paper's ablation table covers portfolio risk only,
+which is the objective the design targets)
 
-The RV decomposition is the dominant driver of tail-risk fidelity; the Lambert *W* transform is a secondary but
-consistent contributor.
+| Metric | Full | w/o RV Decomp. | w/o Lambert W | w/o DMS-TCN | w/o L1 loss | w/o cosine |
+|---|---|---|---|---|---|---|
+| CCF(τ=0) | 0.0533 | *0.0383* | 0.0437 | 0.0456 | 0.0565 | **0.0379** |
+| CCF(τ>0) | 0.0365 | 0.0323 | 0.0341 | **0.0290** | 0.0380 | *0.0297* |
+| Vol CCF(τ=0) | 0.0909 | 0.0720 | 0.0847 | **0.0503** | 0.0923 | *0.0672* |
+| KS(1) | 0.0378 | 0.0391 | 0.0379 | *0.0344* | 0.0376 | **0.0342** |
+| KS(5) | 0.0459 | *0.0419* | 0.0453 | **0.0374** | 0.0465 | 0.0434 |
+| KS(20) | 0.0618 | 0.0635 | 0.0613 | **0.0546** | 0.0628 | *0.0608* |
+| KS(100) | 0.1626 | 0.1384 | 0.1632 | **0.1074** | 0.1671 | *0.1313* |
+| Skew(1) | 0.1993 | *0.1120* | 0.1827 | **0.1060** | 0.2285 | 0.1557 |
+| Skew(5) | 0.3866 | *0.1789* | 0.3842 | **0.1595** | 0.4195 | 0.2857 |
+| Skew(20) | 0.3753 | **0.1903** | 0.3886 | *0.2019* | 0.3981 | 0.2643 |
+| Skew(100) | 0.1157 | **0.0828** | 0.1204 | *0.0832* | 0.1184 | 0.1007 |
+| Kurt(1) | 0.7085 | 2.7388 | 0.8254 | 1.0825 | *0.6571* | **0.5196** |
+| Kurt(5) | 1.0368 | *0.4733* | 0.9996 | **0.4293** | 1.0677 | 0.9689 |
+| Kurt(20) | *0.2621* | 0.4167 | 0.2822 | 0.3934 | 0.2808 | **0.1562** |
+| Kurt(100) | 0.1872 | 0.2026 | **0.1821** | 0.2490 | 0.1855 | *0.1822* |
+| ACF(x) | 0.0009 | 0.0008 | 0.0009 | **0.0007** | 0.0009 | *0.0007* |
+| ACF(\|x\|) | *0.0016* | 0.0032 | 0.0017 | 0.0021 | 0.0016 | **0.0011** |
+| ACF(x²) | *0.0009* | 0.0020 | 0.0010 | 0.0014 | 0.0009 | **0.0006** |
+| Leverage | *0.0008* | 0.0010 | 0.0008 | 0.0011 | 0.0008 | **0.0007** |
+
+The RV decomposition is the dominant driver of tail-risk fidelity, and it is the component whose removal
+also inflates daily kurtosis error the most (0.7085 → 2.7388). Note that no single variant dominates the
+fidelity table: the ablations trade fidelity metrics against one another while all of them lose on portfolio
+risk, which is why the paper's ablation reports risk.
 
 ## Get Started
 
@@ -175,11 +215,16 @@ and run it top to bottom. The generation stage is **tiered**, so what you get de
 | Starting point | What happens when you run the notebook |
 |---|---|
 | **Run as-is** | reuses the existing synthetic data and **prints the results** |
-| **Delete** `result/statistics/synthetic_data/<tag>/*.npy` | **regenerates** scenarios from the saved weight, then results |
+| **Delete** `result/statistics/synthetic_data/<tag>/*.npy` | **regenerates** scenarios from the saved weights, then results |
 | **Also delete** `result/statistics/synthetic_data/<tag>/quantDiffusion_best*.pt` | **trains from scratch**, then generates, then results |
 
-`<tag>` is `baseline` for QuantDiffusion and `wo_rv` / `wo_lambertw` / `wo_moderntcn` for the ablations.
-So: run to reproduce, delete the `.npy` to re-sample, delete the weight to retrain.
+`<tag>` is `baseline` for QuantDiffusion and `a2_wo_rv` / `a2_wo_lambertw` / `a2_wo_moderntcn` / `a2_wo_l1` /
+`a2_wo_cosine` for the ablations. So: run to reproduce, delete the `.npy` to re-sample, delete the weights to
+retrain. Each ablation carries one weight per seed (`quantDiffusion_best_seed{s}({epoch}).pt`), and generation
+reseeds at `1000 + seed`, separately from training.
+
+Notebooks 1 and 2 share the `baseline` folder: the QuantDiffusion column of the benchmark and the Full column
+of the ablation are the same five batches, so the two tables cannot disagree.
 
 **3. Retrain the baselines.** QuantGAN, Tail-GAN, and Diffusion-TS are trained from their own scripts under
 `modules/`; rerun `2_benchmark.ipynb` afterwards to compare against the freshly generated baselines.
@@ -212,94 +257,109 @@ python modules/TailGAN/run.py --train --sets 5 --ensemble 1 --epochs 2000 \
 > therefore the single generator, chosen on the training data selection criterion Tail-GAN itself defines
 > (`vares` 0.0886 against 0.0938 to 0.1173 for the ensemble members), not on test numbers.
 
-**4. Portfolio VaR/ES artifacts.** The TailGAN-style risk metric needs `data/TailGAN/` (rolling windows +
-thresholds + transition matrix). These are **built automatically** the first time you run
-`1_ablation_study.ipynb` or `2_benchmark.ipynb`: `build_windows()` (imported from `modules/TailGAN/run.py`)
-creates the rolling windows if missing, the thresholds are computed on first use, and the transition matrix is
-restored from `data/tailgan_basket/`. No separate step is required.
+**4. Portfolio VaR/ES artifacts.** The Tail-GAN style risk metric needs the rolling-window CSVs under
+`modules/TailGAN/gan_data/indices2_6d`. They are **built automatically** the first time you run
+`1_ablation_study.ipynb` or `2_benchmark.ipynb` (`build_windows()`, imported from `modules/TailGAN/run.py`);
+the thresholds are computed on first use. No separate step is required.
 
 > **The transition matrix is the evaluation basket, so it is version controlled.** Fifty of the sixty eight
 > P&L columns in `Compute_PNL` are static portfolios drawn by `Gen_StaticPort`, which samples from an unseeded
 > normal. Drawing a new matrix rescores **every** model at once, including models that were not retrained, and
-> by enough to matter: one accidental redraw moved QuantGAN's `RE_VaR(0.05)` from 0.5340 to 0.4468 and
-> Diffusion-TS's from 0.5684 to 0.6333 from byte identical samples. `data/TailGAN/` is not tracked, so the
-> matrix itself is kept at `data/tailgan_basket/LShort_Stk6/` and
-> `tailgan_eval.ensure_static_basket` copies it into place; a seed alone would not be enough, since
-> `scipy.sparse.random` is not guaranteed stable across scipy versions. The reported risk numbers reproduce
-> only against this basket. Replacing it is a deliberate act, and every number in the tables moves with it.
+> by enough to matter: an accidental redraw once moved a baseline's `RE_VaR(0.05)` by more than 0.08 from byte
+> identical samples. The reported numbers therefore average over **ten fixed baskets**, tracked at
+> `data/our_basket/basket{0..9}/TransMat_{IS,OOS}.npy`. `utils/tailgan_direct.compute_pnl_direct` takes the
+> matrix as an argument, so each basket is read from its own path with no copy into a live slot; it is verified
+> bit-for-bit against `TG.Compute_PNL`. A seed alone would not be enough, since `scipy.sparse.random` is not
+> guaranteed stable across scipy versions. The reported risk numbers reproduce only against these baskets, and
+> every number in the tables moves if they are replaced.
+>
+> `tailgan_eval.configure_from_project` still prints a warning about drawing a fresh basket into
+> `data/tailgan_basket/`. That path is the *live slot* of the upstream code and is unused here: the evaluation
+> never reads it, so the warning is harmless.
 
 **5. Figures & data check.** `3_visualization.ipynb` renders the paper figures via `utils.make_paper_figures`
-(`pf.fig1()` .. `pf.fig4()`) into `result/images/`, and cross-checks the CRSP dataset against yfinance.
+(one cell per figure) into `result/images/`, and cross-checks the CRSP dataset against yfinance.
 
-The five figures the paper uses are separate, built by `utils/make_paper_figures.py` straight into
-`result/images/`, sized for `acmart` sigconf (3.33 in for one column, 7.0 in across both) at 400 dpi. Section
-3-1 of `3_visualization.ipynb` calls the same builders, one cell per figure, so the notebook and the pdf cannot
-show different plots.
+The figures are sized for `acmart` sigconf (3.33 in for one column, 7.0 in across both) at 400 dpi. Section
+3-1 of `3_visualization.ipynb` calls the same builders the command line uses, so the notebook and the pdf
+cannot show different plots.
 
 ```bash
-python utils/make_paper_figures.py          # all five
+python utils/make_paper_figures.py          # fig1..fig6 and figA
 python utils/make_paper_figures.py 2 4      # only fig2 and fig4
 ```
 
 | File | Content |
 |---|---|
-| `fig1_stylized_facts.png` | ACF of \|r\| and r², and the distribution of cross asset comovement of the volatility channel over scenarios |
+| `fig1_stylized_facts.png` | ACF of \|r\| and r², and the CDF of cross asset comovement of the volatility channel over scenarios |
 | `fig2_distribution.png` | five day cumulative log return distributions for JP Morgan |
-| `fig3_risk_radars.png` | VaR/ES relative error, baselines and ablation |
-| `fig4_risk_horizon.png` | VaR/ES error at every horizon from 20 to 255 trading days |
+| `fig3_risk_radars.png` | VaR/ES relative error, baselines and ablation, read from the CSVs |
+| `fig4_risk_horizon.png` | VaR/ES error at every horizon from 20 to 256 trading days |
 | `fig5_architecture.png` | the draw.io export, copied into place rather than redrawn |
+| `fig6_risk_horizon_strategies.png` | the same error resolved by trading strategy block |
+| `figA_final_horizon_{var,es}.png` | terminal horizon (`h=256`) bars, equal to the risk table at `α=0.05` |
 
 `fig4` needs Tail-GAN's `Compute_PNL`, which corrupts the heap on CPU: the P&L values come out correct, then the
 process dies at whatever allocates next. Each horizon is therefore computed in a subprocess that writes its
-result and leaves through `os._exit`, cached under `result/images/pnl_cache/`, which is safe to delete and is
-what makes a restyle take one second instead of two minutes. Set `CUDA_VISIBLE_DEVICES=-1` to keep it off a busy
-GPU.
+result and leaves through `os._exit`, cached under `result/images/figures/pnl_cache/`, which is safe to delete
+and is what makes a restyle take one second instead of two minutes. **Delete the cache after the synthetic
+samples change**, or fig4/fig6/figA will keep showing the old numbers. Set `CUDA_VISIBLE_DEVICES=-1` to keep it
+off a busy GPU.
 
 **6. Noise schedule (optional).** `ANT_score.ipynb` scores noise schedules with the ANT criterion; this is how
 the cosine schedule was selected.
 
-### Data validation
+### Data sources
 
-The dataset is sourced from CRSP; `3_visualization.ipynb` cross-checks it against public yfinance data. The
-index and commodity series match closely, while JP Morgan shows a minor difference (source/adjustment
-conventions).
+`0_data.ipynb` assembles `data/indices.csv` from two sources: the five index and commodity series
+(`^DJI`, `^IXIC`, `^HSI`, `GC=F`, `CL=F`) come from **Yahoo Finance** via `data/indices/indices_{O,H,L,C,V}.csv`,
+and **JP Morgan** comes from **CRSP** (`data/JPM.csv`, `DlyOpen`/`DlyHigh`/`DlyLow`/`DlyClose`/`DlyVol`).
+
+Section 3-2 of `3_visualization.ipynb` plots the panel against a fresh yfinance download. Note what that
+comparison can and cannot establish: the five Yahoo series match with `max_rel_diff = 0.00000` because they
+were downloaded from the same place, so the check is only meaningful for **JPM**, the one CRSP series, which
+shows `max_rel_diff = 0.011` against Yahoo's adjusted close (source/adjustment conventions).
 
 ## Repository layout
 
 ```
 quantDiffusion/
-├── 1_ablation_study.ipynb   # QuantDiffusion (baseline) + 3 ablations: train / generate / evaluate
+├── 0_data.ipynb             # assemble data/indices.csv and the RV estimators
+├── 1_ablation_study.ipynb   # QuantDiffusion (baseline) + 5 ablations: train / generate / evaluate
 ├── 2_benchmark.ipynb        # QuantDiffusion vs QuantGAN / Tail-GAN / Diffusion-TS
-├── 3_visualization.ipynb    # ACF / correlation / histogram figures + CRSP-vs-yfinance check
+├── 3_visualization.ipynb    # the paper figures + CRSP-vs-yfinance check
 ├── ANT_score.ipynb          # ANT noise-schedule scoring
 ├── models/                  # DMS_TCN.py (DMSTCN), quantTCN.py
 ├── modules/                 # diffusion.py + baselines (QuantGAN, TailGAN, diffusionTS)
-│   └── TailGAN/tailgan_eval.py    # portfolio VaR/ES metric + ensure_static_basket
-├── utils/                   # metric.py, file_manager.py, gaussianize.py, ANT_utils.py,
-│                           #   make_paper_figures.py + make_figures.py + make_square_figures.py (paper figures)
-├── data/                    # indices.csv (CRSP), RV/, tailgan_basket/ (the evaluation basket),
-│                            #   TailGAN/ (auto-built by the notebooks)
+│   ├── TailGAN/tailgan_eval.py    # portfolio VaR/ES metric
+│   └── TailGAN/gan_data/          # rolling windows, auto-built by the notebooks
+├── utils/                   # metric.py, file_manager.py, gaussianize.py, tailgan_direct.py,
+│                            #   ANT_utils.py, make_paper_figures.py + make_figures.py
+│                            #   + make_square_figures.py (paper figures)
+├── data/                    # indices.csv (CRSP), indices/ (OHLCV), RV/, JPM.csv,
+│                            #   our_basket/basket{0..9}/ (the ten evaluation baskets)
 └── result/
-    ├── statistics/          # synthetic_data/<tag>/*.npy, *.csv
-    └── images/              # the five paper figures, drawio/ sources, pnl_cache/
+    ├── statistics/          # synthetic_data/<tag>/{0..4}.npy + weights, and the six summary CSVs
+    └── images/              # the paper figures; drawio/ sources and figures/ helpers are untracked
 ```
 
-`result/images/` is not tracked: the figures are rebuilt by `utils/make_paper_figures.py` or by notebook 3.
+The six summary CSVs are `ablation__gen_quality.csv`, `ablation__tailgan_vares.csv`,
+`ablation__tailgan_vares_IS.csv` and the matching `benchmark__*.csv`. No per-model CSV is written; the mean and
+std live in the summary tables.
 
-Summary CSVs are grouped by prefix: `individual__<tag>__gen_quality.csv` (per model),
-`ablation__*.csv`, and `benchmark__*.csv`.
+`result/images/drawio/`, `result/images/figures/` (which holds `pnl_cache/`) and `scratch/` are not tracked.
 
 ## Code ↔ paper mapping
 
 | Paper | Code |
 |---|---|
 | QuantDiffusion (ours) | tag `baseline`, RV = Close-to-Close, window = 10 |
-| RV decomposition `r = z·√RV` | `fit_transform_garch_12d` (in `1_ablation_study.ipynb`) |
+| RV decomposition `r = z·√RV` | `fit_transform_garch_12d` (in `1_ablation_study.ipynb`), `_fit_scalers` (in `2_benchmark.ipynb`) |
 | Lambert *W* Gaussianization | `utils/gaussianize.py`, `scaling`/`inverse_scaling` in `utils/utils.py` |
 | DMS-TCN | `models/DMS_TCN.py` (`DMSTCN`) |
-| Diffusion (DDPM, Student-*t* prior) | `modules/diffusion.py` |
-| Ablations (w/o RV Decomp. / LambertW / DMS-TCN) | tags `wo_rv` / `wo_lambertw` / `wo_moderntcn` |
-| Portfolio VaR/ES | `modules/TailGAN/tailgan_eval.py` |
+| Diffusion (DDPM, Gaussian noise, cosine schedule) | `modules/diffusion.py` |
+| Ablations | tags `a2_wo_rv` / `a2_wo_lambertw` / `a2_wo_moderntcn` / `a2_wo_l1` / `a2_wo_cosine` |
+| Portfolio VaR/ES | `modules/TailGAN/tailgan_eval.py`, `utils/tailgan_direct.py` |
 | Statistical fidelity metrics | `utils/metric.py` |
 | ANT noise schedule | `ANT_score.ipynb`, `utils/ANT_utils.py` |
 
@@ -307,8 +367,8 @@ Summary CSVs are grouped by prefix: `individual__<tag>__gen_quality.csv` (per mo
 
 ```bibtex
 @inproceedings{kim2026quantdiffusion,
-  title     = {QuantDiffusion: Multivariate Financial Scenario Generation for
-               Portfolio Risk Assessment via Realized Volatility Decomposition},
+  title     = {QuantDiffusion: Deep Generation of Multivariate Financial Scenarios
+               for Portfolio Risk Assessment},
   author    = {Anonymous},
   booktitle = {Proceedings of the 7th ACM International Conference on AI in Finance (ICAIF)},
   year      = {2026},
