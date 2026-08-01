@@ -56,6 +56,8 @@ COL_ABL = {
     "w/o RV": "w/o RV Decomp.",
     "w/o Lambert W": "w/o LambertW",
     "w/o DMS-TCN": "w/o DMS-TCN",
+    "w/o L1 loss": "w/o L1 loss",
+    "w/o cosine": "w/o cosine",
 }
 
 # six axes spanning dependence, marginal shape, tails, clustering and leverage
@@ -79,13 +81,14 @@ RISK = [
 
 def save(fig, name):
     p = os.path.join(HERE, name)
-    fig.savefig(p, dpi=DPI, facecolor="white")
+    fig.savefig(p, dpi=DPI, transparent=True)
     plt.close(fig)
     print("  wrote", os.path.relpath(p, os.path.join(HERE, "..", "..", "..")))
 
 
 # --------------------------------------------------------------------------
-def radar(ax, axes_spec, values, order, rmin=0.16, fmt="{:.4f}", note=True, gamma=1.0):
+def radar(ax, axes_spec, values, order, rmin=0.16, fmt="{:.4f}",
+          note=True, gamma=1.0, fs=4.9, gap=0.092, show_values=True):
     """Radar with every axis inverted so that further out is better.
 
     All six metrics are errors, so each axis is min-max scaled across the models
@@ -126,11 +129,16 @@ def radar(ax, axes_spec, values, order, rmin=0.16, fmt="{:.4f}", note=True, gamm
         ax.fill(a, r, color=C[m], alpha=0.10, lw=0, zorder=2)
         ax.scatter(ang, R[i], s=7, color=C[m], zorder=4, lw=0)
 
+    # raw values at each vertex, best first. Dropped when the panel is too
+    # small to hold them, in which case the table carries the numbers.
+    if not show_values:
+        floor = None
+    # (the loop below is skipped in that case)
     # raw values at each vertex, best first. Two models with near identical
     # errors would stamp their labels on top of each other, so a minimum radial
     # separation is enforced by pushing later labels inward.
-    gap, floor = 0.092, 0.10
-    for j in range(n):
+    floor = 0.10
+    for j in range(n) if show_values else ():
         rank = list(np.argsort(-R[:, j]))
         pos, prev = [], None
         for i in rank:
@@ -146,12 +154,11 @@ def radar(ax, axes_spec, values, order, rmin=0.16, fmt="{:.4f}", note=True, gamm
                 ang[j],
                 rr,
                 fmt.format(M[i, j]),
-                fontsize=4.9,
+                fontsize=fs,
                 color=C[order[i]],
                 ha="center",
                 va="center",
                 zorder=5,
-                bbox=dict(fc="white", ec="none", alpha=0.78, pad=0.5),
             )
     if note:
         ax.text(

@@ -34,8 +34,11 @@ import pandas as pd
 from scipy.stats import wasserstein_distance
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TG_DIR = join(PROJECT, "modules", "TailGAN")
-YOUR_PATH = join(PROJECT, "data", "TailGAN")
+TG_DIR = os.path.dirname(os.path.abspath(__file__))
+# Everything Tail-GAN writes (gan_data, Thresholds, Static_Port_Transform, Gens)
+# lands beside this file rather than under the repository data directory, so the
+# module owns its own working state and nothing outside it has to be cleaned up.
+YOUR_PATH = TG_DIR
 DATA_CSV = join(PROJECT, "data", "indices.csv")  # shared dataset (repo root)
 RESULT_DIR = join(PROJECT, "result", "statistics", "synthetic_data", "tailgan")
 WEIGHT_DIR = join(

@@ -52,7 +52,12 @@ C = {
     "w/o RV": "#7C5296",
     "w/o Lambert W": "#C0651F",
     "w/o DMS-TCN": "#4C8C40",
+    "w/o L1 loss": "#B25550",
+    "w/o cosine": "#3E7C7B",
 }
+# The full model is cosine + smooth-L1 + Gaussian, the Full column of ablation2,
+# whose scenarios live in a2_full; the tables read the same folders, so figures
+# and tables cannot drift apart.
 MODELS = {
     "QuantDiffusion": "baseline",
     "QuantGAN": "quantgan",
@@ -61,9 +66,9 @@ MODELS = {
 }
 ABL = {
     "Full": "baseline",
-    "w/o RV": "wo_rv",
-    "w/o Lambert W": "wo_lambertw",
-    "w/o DMS-TCN": "wo_moderntcn",
+    "w/o RV": "a2_wo_rv",
+    "w/o Lambert W": "a2_wo_lambertw",
+    "w/o DMS-TCN": "a2_wo_moderntcn",
 }
 
 plt.rcParams.update(
@@ -98,7 +103,7 @@ plt.rcParams.update(
 # --------------------------------------------------------------------------
 def save(fig, name):
     p = os.path.join(HERE, name)
-    fig.savefig(p, dpi=DPI, facecolor="white")
+    fig.savefig(p, dpi=DPI, transparent=True)
     plt.close(fig)
     print("  wrote", os.path.relpath(p, ROOT))
 

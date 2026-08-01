@@ -1,8 +1,8 @@
 """The five figures that go in the paper.
 
   fig1  stylized facts:  ACF(|r|), ACF(r^2), cross asset comovement of x_t
-  fig2  five day cumulative log return distributions for JPM, the figure already
-        in main.tex, restyled
+  fig2  daily log return distributions for JPM, the figure already in main.tex,
+        restyled
   fig3  portfolio risk radars, benchmark beside ablation, same axes and format
   fig4  risk error at every horizon, the Tail-GAN metric by h
   fig5  architecture, a temporary raster stand in for the draw.io figure
@@ -98,9 +98,16 @@ plt.rcParams.update(
 
 
 def save(fig, name, outdir=OUT):
+    """Write at DPI with a transparent background.
+
+    The page is white anyway, so a transparent canvas costs nothing and lets the
+    figure sit on a coloured background in a slide without a white box around it.
+    White is still used where an element has to mask what is under it, such as the
+    boxes behind the radar value labels.
+    """
     os.makedirs(outdir, exist_ok=True)
     p = os.path.join(outdir, name)
-    fig.savefig(p, dpi=DPI, facecolor="white")
+    fig.savefig(p, dpi=DPI, transparent=True)
     plt.close(fig)
     print("  wrote", os.path.relpath(p, ROOT))
 
@@ -445,7 +452,7 @@ HIST_FC, HIST_EC = "#3F5D77", "#2B4155"
 SYN_FC, SYN_EC = "#BE7250", "#8F5133"
 
 
-def fig2(asset=2, h=5):
+def fig2(asset=2, h=1):
     """The figure already in main.tex, same layout, quieter colours.
 
     Overlapping filled histograms and a per panel y axis, exactly as the original,
@@ -497,12 +504,15 @@ def fig2(asset=2, h=5):
             ax.set_ylabel("Density", fontsize=6.6, labelpad=1.5)
         if k >= 2:
             ax.set_xlabel(
-                f"Cumulative log return ({h} Day)", fontsize=6.6, labelpad=1.5
+                "Daily log return" if h == 1
+                else f"Cumulative log return ({h} Day)",
+                fontsize=6.6,
+                labelpad=1.5,
             )
     flat[0].legend(
         loc="upper left",
-        fontsize=5.4,
-        handlelength=0.9,
+        fontsize=4.8,
+        handlelength=0.8,
         labelspacing=0.18,
         borderpad=0.18,
         handletextpad=0.4,
@@ -517,61 +527,60 @@ def fig3():
     bm, _ = read_pm_table(os.path.join(ST, "benchmark__tailgan_vares.csv"))
     ab, _ = read_pm_table(os.path.join(ST, "ablation__tailgan_vares.csv"))
 
-    # stacked, one column wide. The twenty four printed values per panel set the
-    # floor on how small each radar can get, since point sizes do not shrink with
-    # the figure, so the pair goes vertically rather than side by side.
-    fig = plt.figure(figsize=(COL, 4.55))
-    for idx, (mean, cols, keys, title, letter) in enumerate(
+    # Side by side inside one column, on fig4's canvas. Each radar then gets about
+    # 1.6 in, which is too small for the thirty six printed vertex values, so the
+    # numbers are dropped and the tables carry them. What the panel still shows is
+    # the shape: which model reaches the outer ring on which axis.
+    fig, axes = plt.subplots(1, 2, figsize=(COL, 1.62),
+                             subplot_kw={"projection": "polar"})
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.72, bottom=0.02, wspace=0.34)
+    for ax, (mean, cols, keys, title, letter) in zip(
+        axes,
         [
             (bm, COL_BENCH, ORDER, "benchmark", "a"),
             (
                 ab,
                 COL_ABL,
-                ["w/o Lambert W", "w/o DMS-TCN", "w/o RV", "Full"],
+                # worst first so the reversed legend reads Full downward
+                [
+                    "w/o RV",
+                    "w/o DMS-TCN",
+                    "w/o cosine",
+                    "w/o Lambert W",
+                    "w/o L1 loss",
+                    "Full",
+                ],
                 "ablation",
                 "b",
             ),
-        ]
+        ],
     ):
         present = {k: cols[k] for k in keys if k in cols and cols[k] in mean.columns}
         vals = {m: {k: mean.loc[k, c] for k, _ in RISK} for m, c in present.items()}
-        ax = fig.add_subplot(2, 1, idx + 1, projection="polar")
-        radar(ax, RISK, vals, list(present), fmt="{:.3f}", note=False, gamma=0.55)
-        ax.set_ylim(0, 1.17)  # tighter than the default outer margin
+        radar(ax, RISK, vals, list(present), note=False, gamma=0.42,
+              show_values=False)
+        ax.set_ylim(0, 1.06)
+        ax.set_yticklabels([])
         for t in ax.get_xticklabels():
-            t.set_fontsize(6.0)
+            t.set_fontsize(4.2)
+        ax.tick_params(pad=0.4)
         relabel(
             ax,
             reverse=True,
-            loc="upper left",
-            bbox_to_anchor=(-0.24, 1.12),
-            fontsize=5.6,
-            handlelength=0.9,
-            labelspacing=0.2,
-            handletextpad=0.4,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.10),
+            ncol=2,
+            fontsize=4.0,
+            columnspacing=0.5,
+            handlelength=0.7,
+            labelspacing=0.15,
+            handletextpad=0.3,
+            frameon=False,
         )
-        ax.text(
-            -0.26,
-            1.10,
-            f"({letter})",
-            transform=ax.transAxes,
-            fontsize=7.6,
-            fontweight="bold",
-            va="bottom",
-            ha="left",
-        )
-        ax.text(
-            1.06,
-            1.10,
-            title,
-            transform=ax.transAxes,
-            fontsize=7.4,
-            va="bottom",
-            ha="right",
-        )
-    # no footnote inside the figure: "further from the centre is better" belongs
-    # in the caption, and at this size it would land on the ES_0.01 labels
-    fig.subplots_adjust(left=0.10, right=0.90, top=0.925, bottom=0.025, hspace=0.34)
+        ax.text(-0.16, 1.04, f"({letter})", transform=ax.transAxes, fontsize=6.4,
+                fontweight="bold", va="bottom", ha="left")
+        ax.text(1.0, 1.04, title, transform=ax.transAxes, fontsize=5.6,
+                va="bottom", ha="right")
     save(fig, "fig3_risk_radars.png")
 
 
@@ -579,17 +588,12 @@ def fig3():
 # fig 4: risk error at every horizon
 # ==========================================================================
 # fig4 must equal Table portfolio_risk at its terminal horizon, so it is computed
-# on the same five tracked OOS baskets (data/tailgan_basket) and five seeds.
-_FIG_LIVE_IS = os.path.join(
-    PROJECT,
-    "data",
-    "TailGAN",
-    "Static_Port_Transform",
-    "LShort_Stk6",
-    "TransMat_IS.npy",
-)
-_FIG_BASKET_DIR = os.path.join(PROJECT, "data", "tailgan_basket")
-N_BASKETS = 5
+# exactly as notebook 2's vares_grid_oos: the same five OOS baskets
+# (data/our_basket) and five seeds, each basket's transition matrix read directly
+# and fed to compute_pnl_direct (bit-for-bit identical to TG.Compute_PNL, no live
+# slot swap). h=256 (=SEQ_LEN) is the untruncated terminal that matches the table.
+_FIG_BASKET_DIR = os.path.join(PROJECT, "data", "our_basket")
+N_BASKETS = 10
 N_SEEDS = 5
 # the 68 Compute_PNL columns in order: BuyHold[0:6], static portfolios[6:56],
 # mean reversion[56:62], trend following[62:68]. "all" is what fig4 reports;
@@ -608,19 +612,20 @@ def _cache_path(h, b):
 
 def pnl_worker(h):
     """VaR/ES relative error at one horizon, computed exactly as Table
-    portfolio_risk. For each of the five tracked OOS baskets the basket is copied
-    into the live slot Compute_PNL reads; real and every seed batch are truncated
-    to [:h] and scored with the same tailgan_eval.relerror the table uses; the per
-    basket mean over the five seeds is cached as h{h}_b{b}_re.npy.
+    portfolio_risk and notebook 2's vares_grid_oos. For each of the five OOS
+    baskets (data/our_basket) the basket's transition matrix is read directly and
+    fed to compute_pnl_direct (bit-for-bit identical to TG.Compute_PNL, no live
+    slot swap); real and every seed batch are truncated to [:h] and scored with
+    the same tailgan_eval.relerror the table uses; the per basket mean over the
+    five seeds is cached as h{h}_b{b}_re.npy.
 
-    Compute_PNL can die inside the interpreter, so each basket is written the
-    moment it is done and a rerun resumes from what survived; the worker leaves
-    through os._exit to skip teardown. The live basket is restored on the way out.
+    Compute_PNL/torch can die inside the interpreter at teardown, so each basket
+    is written the moment it is done and a rerun resumes from what survived; the
+    worker leaves through os._exit to skip teardown.
     """
-    import shutil as _sh
-
     sys.path.insert(0, os.path.join(ROOT, "modules", "TailGAN"))
     import tailgan_eval as TE
+    from utils.tailgan_direct import compute_pnl_direct
 
     TG = TE.configure_from_project(ROOT)
     real, _ = load_real()
@@ -631,53 +636,45 @@ def pnl_worker(h):
         if arrs:
             seeds[m] = arrs
 
-    def pnl(A):  # whole batch at once, like vares_relerror
+    def pnl(A, tm):  # whole batch, horizon-truncated, tm read directly
         return (
-            TG.Compute_PNL(TG.Tensor(np.asarray(A[:, :, :h], dtype=np.float32)))
+            compute_pnl_direct(
+                TG, TG.Tensor(np.asarray(A[:, :, :h], dtype=np.float32)), tm
+            )
             .cpu()
             .detach()
             .numpy()
         )
 
     os.makedirs(CACHE, exist_ok=True)
-    bak = _FIG_LIVE_IS + ".figbak"
-    if not os.path.exists(bak):  # keep the first (real reference) backup
-        _sh.copyfile(_FIG_LIVE_IS, bak)
-    try:
-        for b in range(N_BASKETS):
-            p = _cache_path(h, b)
-            if os.path.exists(p):
-                continue
-            _sh.copyfile(
-                os.path.join(_FIG_BASKET_DIR, f"basket{b}", "TransMat_OOS.npy"),
-                _FIG_LIVE_IS,
-            )
-            rp = pnl(real)
-            assert rp.shape[1] == 68, f"expected 68 P&L columns, got {rp.shape[1]}"
-            out = {st: {} for st in _STRATS}
-            for m, arrs in seeds.items():
-                acc = {st: [[], []] for st in _STRATS}
-                for a in arrs:
-                    fp = pnl(a)
-                    for st, cols in _STRATS.items():
-                        d = TE.relerror(rp[:, cols], fp[:, cols], (ALPHA,))
-                        acc[st][0].append(d[f"RE_VaR({ALPHA})"])
-                        acc[st][1].append(d[f"RE_ES({ALPHA})"])
-                for st in _STRATS:
-                    out[st][m] = [
-                        float(np.mean(acc[st][0])),
-                        float(np.mean(acc[st][1])),
-                    ]
-            tmp = p + ".partial"
-            with open(tmp, "wb") as fh:  # write then rename, never a half file
-                np.save(fh, np.array(out, dtype=object), allow_pickle=True)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, p)
-            print(f"    h={h} basket{b}: {list(out)} cached", flush=True)
-    finally:
-        _sh.copyfile(bak, _FIG_LIVE_IS)
-        os.remove(bak)
+    for b in range(N_BASKETS):
+        p = _cache_path(h, b)
+        if os.path.exists(p):
+            continue
+        tm = np.load(os.path.join(_FIG_BASKET_DIR, f"basket{b}", "TransMat_OOS.npy"))
+        rp = pnl(real, tm)
+        assert rp.shape[1] == 68, f"expected 68 P&L columns, got {rp.shape[1]}"
+        out = {st: {} for st in _STRATS}
+        for m, arrs in seeds.items():
+            acc = {st: [[], []] for st in _STRATS}
+            for a in arrs:
+                fp = pnl(a, tm)
+                for st, cols in _STRATS.items():
+                    d = TE.relerror(rp[:, cols], fp[:, cols], (ALPHA,))
+                    acc[st][0].append(d[f"RE_VaR({ALPHA})"])
+                    acc[st][1].append(d[f"RE_ES({ALPHA})"])
+            for st in _STRATS:
+                out[st][m] = [
+                    float(np.mean(acc[st][0])),
+                    float(np.mean(acc[st][1])),
+                ]
+        tmp = p + ".partial"
+        with open(tmp, "wb") as fh:  # write then rename, never a half file
+            np.save(fh, np.array(out, dtype=object), allow_pickle=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, p)
+        print(f"    h={h} basket{b}: {list(out)} cached", flush=True)
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
@@ -686,9 +683,8 @@ def pnl_worker(h):
 def pnl_cached(h, tries=20):
     """Relative error per model at horizon h, averaged over the five baskets.
 
-    Spawns the worker until every basket is cached, restores the live basket if a
-    crashed worker left it swapped, then averages the per basket means so the
-    terminal horizon equals Table portfolio_risk.
+    Spawns the worker until every basket is cached, then averages the per basket
+    means so the terminal horizon equals Table portfolio_risk.
     """
     for _ in range(tries):
         missing = [b for b in range(N_BASKETS) if not os.path.exists(_cache_path(h, b))]
@@ -700,12 +696,6 @@ def pnl_cached(h, tries=20):
             check=False,
             cwd=PROJECT,
         )
-    bak = _FIG_LIVE_IS + ".figbak"
-    if os.path.exists(bak):  # a crashed worker left the slot swapped
-        import shutil as _sh
-
-        _sh.copyfile(bak, _FIG_LIVE_IS)
-        os.remove(bak)
     per_basket = [
         np.load(_cache_path(h, b), allow_pickle=True).item()
         for b in range(N_BASKETS)
@@ -728,8 +718,11 @@ def fig4():
     pnl = {h: pnl_cached(h) for h in HS}
     order = [m for m in order_models() if m in pnl[HS[0]]["all"]]
 
-    fig, axes = plt.subplots(2, 1, figsize=(COL, 2.42), sharex=True)
-    fig.subplots_adjust(left=0.165, right=0.985, top=0.815, bottom=0.155, hspace=0.14)
+    # same canvas and type sizes as fig6, so the two risk figures read as a
+    # pair rather than as two different chart styles
+    fig, axes = plt.subplots(2, 1, figsize=(COL, 1.55), sharex=True)
+    fig.subplots_adjust(left=0.165, right=0.985, top=0.795, bottom=0.235,
+                        hspace=0.18)
     for ax, row, lab in zip(
         axes, (0, 1), [r"RE$_{\mathrm{VaR}}$", r"RE$_{\mathrm{ES}}$"]
     ):
@@ -746,39 +739,32 @@ def fig4():
                 label=m,
                 zorder=3,
             )
-        ax.set_ylabel(f"{lab} ({ALPHA})", fontsize=6.2, labelpad=1.5)
-        ax.yaxis.set_major_locator(MaxNLocator(4))
-        ax.tick_params(labelsize=5.4, pad=1.2)
-        ax.grid(axis="y")
+        # the alpha lives in the caption, as in fig6
+        ax.set_ylabel(lab, fontsize=5.6, labelpad=1.4)
+        ax.yaxis.set_major_locator(MaxNLocator(3))
+        ax.tick_params(labelsize=5.0, pad=1.0)
+        ax.grid(axis="y", lw=0.4)
         ax.set_axisbelow(True)
         ax.set_ylim(bottom=0)
-    axes[1].set_xlabel(r"horizon $h$ (trading days)", fontsize=6.2, labelpad=1.2)
+    axes[1].set_xlabel(r"horizon $h$ (trading days)", fontsize=5.2, labelpad=1.2)
     # one boxed row above the panels: Tail-GAN leaves the top of the first panel
     # at the short horizons, so anything placed inside it collides
     relabel(
         axes[0],
         ncol=4,
         loc="lower center",
-        bbox_to_anchor=(0.5, 1.02),
+        bbox_to_anchor=(0.5, 1.06),
         frameon=True,
         fancybox=False,
         edgecolor="#8A8A8A",
         facecolor="white",
         framealpha=1.0,
-        fontsize=4.9,
-        handlelength=0.9,
+        fontsize=4.8,
+        handlelength=0.8,
         handletextpad=0.3,
         columnspacing=0.55,
         borderpad=0.25,
         borderaxespad=0.0,
-    )
-    axes[1].text(
-        0.02,
-        0.05,
-        "mean over all 68 P&L columns",
-        fontsize=5.0,
-        color="#666666",
-        transform=axes[1].transAxes,
     )
     save(fig, "fig4_risk_horizon.png")
 
@@ -919,61 +905,76 @@ def _fig5_unused():
 # fig 6: fig4 resolved per trading strategy
 # ==========================================================================
 def fig6():
-    """The fig4 horizon curves resolved by trading strategy: static portfolios,
-    mean reversion and trend following as three columns, RE of VaR above and RE of
-    ES below, each averaged over the same five baskets and five seeds so a column
-    at the terminal horizon is the strategy's own entry in the risk table.
+    """Risk error by trading strategy, averaged over the horizon grid.
+
+    The four groups are the blocks of Compute_PNL's sixty eight columns: buy and
+    hold on the six assets, the fifty static portfolios, mean reversion and trend
+    following. Buy and hold is not cached on its own, but relerror is a plain mean
+    over columns, so the block recombines exactly:
+
+        BH = (68 * all - 50 * Port - 6 * MR - 6 * TF) / 6
+
+    The bar is the mean over the eight horizons and the whisker spans h = 20 to
+    h = 256, because the error grows with the horizon and a bare average would sit
+    below the terminal value the risk table reports. Group sizes are printed beside
+    each name since the fifty static portfolios dominate the pooled column.
     """
     pnl = {h: pnl_cached(h) for h in HS}
-    cols = [
-        ("Port", "Static portfolios"),
-        ("MR", "Mean reversion"),
-        ("TF", "Trend following"),
-    ]
     order = [m for m in order_models() if m in pnl[HS[0]]["all"]]
+    NCOL = {"BH": 6, "Port": 50, "MR": 6, "TF": 6}
+    groups = [("BH", "Buy and hold"), ("Port", "Static portfolios"),
+              ("MR", "Mean reversion"), ("TF", "Trend following")]
 
-    fig, axes = plt.subplots(2, 3, figsize=(FULL, 2.7), sharex=True)
-    fig.subplots_adjust(
-        left=0.072, right=0.99, top=0.80, bottom=0.135, hspace=0.14, wspace=0.24
-    )
-    rows = [(0, r"RE$_{\mathrm{VaR}}$"), (1, r"RE$_{\mathrm{ES}}$")]
-    for j, (skey, sname) in enumerate(cols):
-        for i, (row, lab) in enumerate(rows):
-            ax = axes[i][j]
-            for m in order:
-                y = [pnl[h][skey][m][row] for h in HS]
-                ax.plot(
-                    HS,
-                    y,
-                    color=C[m],
-                    lw=1.2 if m == "QuantDiffusion" else 0.8,
-                    marker="o",
-                    ms=1.9,
-                    mew=0,
-                    label=m,
-                    zorder=3,
-                )
-            ax.yaxis.set_major_locator(MaxNLocator(4))
-            ax.tick_params(labelsize=5.4, pad=1.2)
-            ax.grid(axis="y")
-            ax.set_axisbelow(True)
-            ax.set_ylim(bottom=0)
-            if i == 0:
-                ax.set_title(sname, fontsize=6.8, pad=2.5)
-            if j == 0:
-                ax.set_ylabel(f"{lab} ({ALPHA})", fontsize=6.2, labelpad=1.5)
-        axes[1][j].set_xlabel(r"horizon $h$ (trading days)", fontsize=6.0, labelpad=1.2)
+    def val(h, key, m, row):
+        if key != "BH":
+            return pnl[h][key][m][row]
+        a, p_, mr, tf = (pnl[h][k][m][row] for k in ("all", "Port", "MR", "TF"))
+        return (68.0 * a - 50.0 * p_ - 6.0 * mr - 6.0 * tf) / 6.0
+
+    # half the previous height, so the two panels each get about half an inch and
+    # the ticks and the group labels have to shrink with them
+    fig, axes = plt.subplots(2, 1, figsize=(COL, 1.55), sharex=True)
+    fig.subplots_adjust(left=0.165, right=0.985, top=0.795, bottom=0.235,
+                        hspace=0.18)
+    x = np.arange(len(groups))
+    w = 0.20
+    for row, (ax, lab) in enumerate(zip(axes, [r"RE$_{\mathrm{VaR}}$",
+                                              r"RE$_{\mathrm{ES}}$"])):
+        for k, m in enumerate(order):
+            mean = [np.mean([val(h, g, m, row) for h in HS]) for g, _ in groups]
+            lo = [min(val(h, g, m, row) for h in HS) for g, _ in groups]
+            hi = [max(val(h, g, m, row) for h in HS) for g, _ in groups]
+            pos = x + (k - (len(order) - 1) / 2) * w
+            ax.bar(pos, mean, w * 0.88, color=C[m], lw=0, zorder=3,
+                   label=m if row == 0 else None)
+            ax.vlines(pos, lo, hi, color="#3A3A3A", lw=0.55, zorder=4)
+            ax.hlines(hi, pos - w * 0.22, pos + w * 0.22, color="#3A3A3A",
+                      lw=0.55, zorder=4)
+            ax.hlines(lo, pos - w * 0.22, pos + w * 0.22, color="#3A3A3A",
+                      lw=0.55, zorder=4)
+        # the alpha is in the caption, so the axis carries only the measure name;
+        # at half the height a longer label would collide with the other panel
+        ax.set_ylabel(lab, fontsize=5.6, labelpad=1.4)
+        ax.yaxis.set_major_locator(MaxNLocator(3))
+        ax.tick_params(labelsize=5.0, pad=1.0)
+        ax.grid(axis="y", lw=0.4)
+        ax.set_axisbelow(True)
+        ax.set_ylim(bottom=0)
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(
+        [f"{n}\n$n={NCOL[g]}$" for g, n in groups], fontsize=5.2)
+    axes[1].tick_params(axis="x", pad=1.6)
     relabel(
-        axes[0][1],
+        axes[0],
         ncol=4,
         loc="lower center",
-        bbox_to_anchor=(0.5, 1.14),
+        bbox_to_anchor=(0.5, 1.06),
         frameon=True,
         fancybox=False,
         edgecolor="#8A8A8A",
         facecolor="white",
         framealpha=1.0,
-        fontsize=5.2,
+        fontsize=5.4,
         handlelength=0.9,
         handletextpad=0.3,
         columnspacing=0.7,
@@ -984,7 +985,39 @@ def fig6():
 
 
 # ==========================================================================
-FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6}
+# appendix: value at the terminal horizon (h = HS[-1]), one image per measure
+# ==========================================================================
+def figA_final_horizon():
+    h = HS[-1]
+    p = pnl_cached(h)["all"]                       # {model: (RE_VaR, RE_ES)}
+    order = [m for m in order_models() if m in p]
+    labels = [DISPLAY.get(m, m) for m in order]
+    for row, name, tag_ in [(0, r"RE$_{\mathrm{VaR}}$", "var"),
+                            (1, r"RE$_{\mathrm{ES}}$", "es")]:
+        vals = [p[m][row] for m in order]
+        fig, ax = plt.subplots(figsize=(COL, 1.75))
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.85, bottom=0.20)
+        x = list(range(len(order)))
+        ax.bar(x, vals, width=0.62, color=[C[m] for m in order], zorder=3)
+        for i, v in enumerate(vals):
+            ax.text(i, v, f"{v:.3f}", ha="center", va="bottom",
+                    fontsize=5.6, zorder=4)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=6.2)
+        ax.set_ylabel(f"{name} ($\\alpha={ALPHA}$)", fontsize=6.6, labelpad=1.5)
+        ax.set_title(f"Terminal horizon $h={h}$", fontsize=7.4,
+                     fontweight="bold", pad=3)
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+        ax.tick_params(labelsize=5.8)
+        ax.grid(axis="y")
+        ax.set_axisbelow(True)
+        ax.set_ylim(0, max(vals) * 1.18)
+        save(fig, f"figA_final_horizon_{tag_}.png")
+
+
+# ==========================================================================
+FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6,
+        "A": figA_final_horizon}
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--pnl-worker":

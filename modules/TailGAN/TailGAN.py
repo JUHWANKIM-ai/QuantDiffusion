@@ -130,7 +130,8 @@ def Compute_PNL(R):
     """
     # convert to Prices
     prices_l = Inc2Price(R)
-    port_prices_l = StaticPort(prices_l, opt.n_trans, opt.static_way, insample=True)
+    port_prices_l = StaticPort(prices_l, opt.n_trans, opt.static_way,
+                               insample=getattr(opt, "pnl_insample", True))
 
     PNL_BH = BuyHold(prices_l, opt.Cap)
     PNL_l = [PNL_BH]

@@ -2,7 +2,10 @@
 .vscode
 .claude
 scratch/
-data/TailGAN/
+modules/TailGAN/gan_data/
+modules/TailGAN/Thresholds/
+modules/TailGAN/Static_Port_Transform/
+modules/TailGAN/Gens/
 modules/diffusionTS/Data
 result/images/drawio
 result/images/figures

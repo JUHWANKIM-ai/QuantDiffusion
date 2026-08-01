@@ -128,7 +128,7 @@ def _scaled_ccf_loss(real_mean_ccf, fake_mean_ccf, loss_type="mse"):
         # 기존에 _scalar_diff_loss를 호출하셨다면 해당 함수 사용
         loss_val = _scalar_diff_loss(diff, loss_type)
 
-    return round(float(loss_val), 4)
+    return round(float(loss_val), 6)
 
 
 def calculate_ccf(real_data, fake_data, max_lag):
@@ -208,8 +208,8 @@ def calculate_distribution_scores(real, fake, windows):
         # ==========================================================
         # 4. 결과 저장
         # ==========================================================
-        results[f"EMD({w})"] = np.round(np.mean(emd_scores), decimals=4)
-        results[f"KS({w})"] = np.round(np.mean(ks_scores), decimals=4)
+        results[f"EMD({w})"] = np.round(np.mean(emd_scores), decimals=6)
+        results[f"KS({w})"] = np.round(np.mean(ks_scores), decimals=6)
     # DataFrame 포맷팅
     ordered_keys = [f"{m}({w})" for m in metrics for w in windows]
     df_avg_scores = pd.DataFrame(
@@ -279,8 +279,8 @@ def calculate_skew_kurtosis(real_data, fake_data, windows):
             kurt_diffs_assets.append(kurt_diff)
 
         # 모든 자산에 대한 평균값을 결과 딕셔너리에 저장
-        results[f"Skew({w})"] = np.round(np.nanmean(skew_diffs_assets), decimals=4)
-        results[f"Kurt({w})"] = np.round(np.nanmean(kurt_diffs_assets), decimals=4)
+        results[f"Skew({w})"] = np.round(np.nanmean(skew_diffs_assets), decimals=6)
+        results[f"Kurt({w})"] = np.round(np.nanmean(kurt_diffs_assets), decimals=6)
 
     # DataFrame 포맷팅 (요청하신 형식)
     ordered_keys = [f"{m}({w})" for m in metrics for w in windows]
@@ -361,13 +361,13 @@ def calculate_acf_score(real, fake, lags=30, loss_type="mse"):
         # (5) 종목(C)별로 Loss 계산
         for i in range(C):
             # _scalar_diff_loss가 1D 배열(lags + 1 길이)을 받는다고 가정
-            val = round(float(_scalar_diff_loss(diff[i], loss_type)), 4)
+            val = round(float(_scalar_diff_loss(diff[i], loss_type)), 6)
             acf_scores[f"Group {i+1}"][title] = val
             avg_scores_per_transform[title].append(val)
 
     # (6) 전체 "평균의 평균(Mean of Means)" 계산
     overall_average_scores = {
-        title: round(np.mean(vals), 4)
+        title: round(np.mean(vals), 6)
         for title, vals in avg_scores_per_transform.items()
     }
 
@@ -450,12 +450,12 @@ def calculate_leverage_effect(real, fake, lags=30, loss_type="mse"):
     # (4) 종목(C)별로 Loss 계산
     for i in range(C):
         # _scalar_diff_loss가 1D 배열(lags 길이)을 받는다고 가정
-        loss_val = round(float(_scalar_diff_loss(diff[i], loss_type)), 4)
+        loss_val = round(float(_scalar_diff_loss(diff[i], loss_type)), 6)
         leverage_scores[f"Group {i+1}"] = loss_val
         all_group_losses.append(loss_val)
 
     # (5) 전체 평균 손실 계산
-    overall_mean = round(float(np.mean(all_group_losses)), 4)
+    overall_mean = round(float(np.mean(all_group_losses)), 6)
 
     # (6) DataFrame 래핑
     df_overall = pd.DataFrame(

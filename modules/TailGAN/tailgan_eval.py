@@ -124,7 +124,10 @@ def configure_from_project(project_root, data_name="indices2_6d",
     threshold caches already exist from a prior `run.py --train` (they do after retraining).
     """
     HERE = os.path.dirname(os.path.abspath(__file__))
-    YOUR_PATH = join(project_root, "data", "TailGAN")
+    # Tail-GAN's working state lives beside run.py, not under the repository data
+    # directory, so the module is self contained; project_root is still used for
+    # the shared dataset and for the tracked reference basket.
+    YOUR_PATH = HERE
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
     _cwd = os.getcwd()
@@ -153,6 +156,7 @@ def configure_from_project(project_root, data_name="indices2_6d",
         o.static_way = static_way
         o.n_trans = n_trans
         o.alphas = list(alphas)
+        o.pnl_insample = False   # evaluation scores the out-of-sample basket (TransMat_OOS)
         TG.R_shape = (n_rows, n_cols)
 
         # put the evaluation basket in place from the tracked reference

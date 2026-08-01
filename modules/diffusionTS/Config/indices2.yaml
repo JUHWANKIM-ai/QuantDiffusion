@@ -29,7 +29,10 @@ solver:
   max_epochs: 12000
   results_folder: ./Checkpoints_indices2
   gradient_accumulate_every: 2
-  save_cycle: 100           # checkpoint every 100 steps; best picked by EMD afterwards
+  save_cycle: 1000          # checkpoint every 1000 steps -> 12 candidates, best picked by EMD
+                            # afterwards. The candidate grid is deliberately of the same order as
+                            # the other runners' (ours validates 21 epochs, QuantGAN its saved
+                            # epochs), so no baseline gets a larger selection budget than another.
   ema:
     decay: 0.995
     update_interval: 10
