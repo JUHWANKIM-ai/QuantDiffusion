@@ -33,6 +33,8 @@ across horizons, volatility clustering, and portfolio-level VaR/ES over state-of
 
 ## QuantDiffusion Pipeline
 
+![The QuantDiffusion architecture: RV decomposition and inverse Lambert W of the six asset returns, the DDPM chain over the 12-channel state with the DMS-TCN score network, and the reconstruction back to returns.](result/images/fig5_architecture.png)
+
 Each return is factored into a standardized shock `z` and a volatility magnitude `√RV`, and the diffusion model
 only ever sees the components:
 
@@ -79,7 +81,7 @@ ten per-basket values (each already averaged over the five seeds).
 Best in **bold**, second best in *italic*; lower is better. Every number below is read straight out of
 `result/statistics/*.csv`, which the notebooks regenerate.
 
-### Statistical fidelity
+### Generation fidelity
 
 | Metric | QuantDiffusion | QuantGAN | Tail-GAN | Diffusion-TS |
 |---|---|---|---|---|
@@ -140,11 +142,15 @@ tail-risk fidelity are distinct objectives, and QuantDiffusion is the only model
 
 ### Risk across horizons and strategies
 
+![Relative error of portfolio VaR and ES at every horizon from 20 to 256 trading days, for QuantDiffusion and the three baselines.](result/images/fig4_risk_horizon.png)
+
 `fig4` reads the same relative error at every horizon `h ∈ {20, 40, 64, 96, 128, 160, 200, 256}`, pooled over
 the 68 P&L columns `Compute_PNL` produces; `h = 256` reproduces the table above. QuantDiffusion is lowest at
-every horizon on both VaR and ES. `fig6` resolves the same errors into the four strategy blocks (buy and hold
-`n=6`, static portfolios `n=50`, mean reversion `n=6`, trend following `n=6`); averaged over horizons,
-QuantDiffusion is lowest in all eight cells.
+every horizon on both VaR and ES. Tail-GAN is the weakest at short horizons and Diffusion-TS degrades as the
+horizon grows, so the ordering of the baselines depends on `h` while QuantDiffusion stays below all three.
+`fig6` resolves the same errors into the four strategy blocks (buy and hold `n=6`, static portfolios `n=50`,
+mean reversion `n=6`, trend following `n=6`); averaged over horizons, QuantDiffusion is lowest in all eight
+cells.
 
 ### Ablation
 
@@ -168,35 +174,30 @@ transform **1.5% to 3.0%**, and `ℓ2` in place of smooth-`ℓ1` **1.6% on avera
 does not win is `RE ES(0.01)`, where the linear schedule is lower; over the ten baskets the full model is best
 on that entry in one, so the gap belongs to the schedule rather than to the basket draw.
 
-**Statistical fidelity** (reported for completeness; the paper's ablation table covers portfolio risk only,
-which is the objective the design targets)
+**Generation fidelity** (reported for completeness; the paper's ablation table covers portfolio risk only,
+which is the objective the design targets). Read as a heat map rather than a table, since what the ablation
+asks is how each variant moves *relative to the full model*: every cell is the ratio of that variant's error
+to the error of Full, whose own row is therefore the blank reference, with blue below `1.00` (better than Full)
+and red above it. The last column, ruled off, is the same ratio on the mean of the three VaR levels of the risk
+table above.
 
-| Metric | Full | w/o RV Decomp. | w/o Lambert W | w/o DMS-TCN | w/o L1 loss | w/o cosine |
-|---|---|---|---|---|---|---|
-| CCF(τ=0) | 0.0533 | *0.0383* | 0.0437 | 0.0456 | 0.0565 | **0.0379** |
-| CCF(τ>0) | 0.0365 | 0.0323 | 0.0341 | **0.0290** | 0.0380 | *0.0297* |
-| Vol CCF(τ=0) | 0.0909 | 0.0720 | 0.0847 | **0.0503** | 0.0923 | *0.0672* |
-| KS(1) | 0.0378 | 0.0391 | 0.0379 | *0.0344* | 0.0376 | **0.0342** |
-| KS(5) | 0.0459 | *0.0419* | 0.0453 | **0.0374** | 0.0465 | 0.0434 |
-| KS(20) | 0.0618 | 0.0635 | 0.0613 | **0.0546** | 0.0628 | *0.0608* |
-| KS(100) | 0.1626 | 0.1384 | 0.1632 | **0.1074** | 0.1671 | *0.1313* |
-| Skew(1) | 0.1993 | *0.1120* | 0.1827 | **0.1060** | 0.2285 | 0.1557 |
-| Skew(5) | 0.3866 | *0.1789* | 0.3842 | **0.1595** | 0.4195 | 0.2857 |
-| Skew(20) | 0.3753 | **0.1903** | 0.3886 | *0.2019* | 0.3981 | 0.2643 |
-| Skew(100) | 0.1157 | **0.0828** | 0.1204 | *0.0832* | 0.1184 | 0.1007 |
-| Kurt(1) | 0.7085 | 2.7388 | 0.8254 | 1.0825 | *0.6571* | **0.5196** |
-| Kurt(5) | 1.0368 | *0.4733* | 0.9996 | **0.4293** | 1.0677 | 0.9689 |
-| Kurt(20) | *0.2621* | 0.4167 | 0.2822 | 0.3934 | 0.2808 | **0.1562** |
-| Kurt(100) | 0.1872 | 0.2026 | **0.1821** | 0.2490 | 0.1855 | *0.1822* |
-| ACF(x) | 0.0009 | 0.0008 | 0.0009 | **0.0007** | 0.0009 | *0.0007* |
-| ACF(\|x\|) | *0.0016* | 0.0032 | 0.0017 | 0.0021 | 0.0016 | **0.0011** |
-| ACF(x²) | *0.0009* | 0.0020 | 0.0010 | 0.0014 | 0.0009 | **0.0006** |
-| Leverage | *0.0008* | 0.0010 | 0.0008 | 0.0011 | 0.0008 | **0.0007** |
+![Ablation generation fidelity as the ratio to the full model, on six fidelity metrics and the mean VaR relative error. Blue is better than the full model, red is worse.](result/images/fig7c_heatmap.png)
 
-The RV decomposition is the dominant driver of tail-risk fidelity, and it is the component whose removal
-also inflates daily kurtosis error the most (0.7085 → 2.7388). Note that no single variant dominates the
-fidelity table: the ablations trade fidelity metrics against one another while all of them lose on portfolio
-risk, which is why the paper's ablation reports risk.
+Two readings come out of it. First, the risk column is red for **every** variant (`1.02` to `1.76`), while the
+fidelity block is mixed and blue in about half of its cells: several variants are better than Full on fidelity
+and all of them are worse on risk. The two are distinct axes, which is why the paper's ablation reports risk.
+Removing the cosine schedule is the clean case: it improves all six fidelity cells (`0.71` to `0.91`) and still
+costs `1.12` on VaR. Second, the RV decomposition
+is where the two axes agree. Removing it is the worst column on risk (`1.76`) and the worst anywhere on the
+tail and clustering metrics, inflating daily kurtosis error by `3.87×` and the autocorrelation of `r²` and
+`|r|` by `2.21×` and `2.00×`; removing the DMS-TCN backbone is the second worst on both (`1.25` on VaR,
+`1.32×` to `1.56×` on clustering). Skewness is the one column where both of those variants beat Full (`0.56`
+and `0.53`), and it is the known weak axis of the representation rather than a win for them: dividing by the
+realized volatility leaves the innovation channel close to symmetric, so marginal asymmetry has to be rebuilt
+through the dependence between the two channels.
+
+The full nineteen metrics for all six columns are in `result/statistics/ablation__gen_quality.csv`;
+`python utils/make_paper_tables.py ablation` renders them as the LaTeX table.
 
 ## Get Started
 
@@ -285,8 +286,9 @@ The figures are sized for `acmart` sigconf (3.33 in for one column, 7.0 in acros
 cannot show different plots.
 
 ```bash
-python utils/make_paper_figures.py          # fig1..fig6 and figA
+python utils/make_paper_figures.py          # fig1..fig7 and figA
 python utils/make_paper_figures.py 2 4      # only fig2 and fig4
+python utils/make_paper_tables.py           # the two fidelity tables, as LaTeX into scratch/
 ```
 
 | File | Content |
@@ -297,6 +299,7 @@ python utils/make_paper_figures.py 2 4      # only fig2 and fig4
 | `fig4_risk_horizon.png` | VaR/ES error at every horizon from 20 to 256 trading days |
 | `fig5_architecture.png` | the draw.io export, copied into place rather than redrawn |
 | `fig6_risk_horizon_strategies.png` | the same error resolved by trading strategy block |
+| `fig7c_heatmap.png` | ablation generation fidelity as the ratio to the full model, the fidelity counterpart of `fig3` |
 | `figA_final_horizon_{var,es}.png` | terminal horizon (`h=256`) bars, equal to the risk table at `α=0.05` |
 
 `fig4` needs Tail-GAN's `Compute_PNL`, which corrupts the heap on CPU: the P&L values come out correct, then the
@@ -335,7 +338,8 @@ quantDiffusion/
 │   └── TailGAN/gan_data/          # rolling windows, auto-built by the notebooks
 ├── utils/                   # metric.py, file_manager.py, gaussianize.py, tailgan_direct.py,
 │                            #   ANT_utils.py, make_paper_figures.py + make_figures.py
-│                            #   + make_square_figures.py (paper figures)
+│                            #   + make_square_figures.py (paper figures),
+│                            #   make_paper_tables.py (the fidelity tables as LaTeX)
 ├── data/                    # indices.csv (CRSP), indices/ (OHLCV), RV/, JPM.csv,
 │                            #   our_basket/basket{0..9}/ (the ten evaluation baskets)
 └── result/
@@ -362,15 +366,3 @@ std live in the summary tables.
 | Portfolio VaR/ES | `modules/TailGAN/tailgan_eval.py`, `utils/tailgan_direct.py` |
 | Statistical fidelity metrics | `utils/metric.py` |
 | ANT noise schedule | `ANT_score.ipynb`, `utils/ANT_utils.py` |
-
-## Citation
-
-```bibtex
-@inproceedings{kim2026quantdiffusion,
-  title     = {QuantDiffusion: Deep Generation of Multivariate Financial Scenarios
-               for Portfolio Risk Assessment},
-  author    = {Anonymous},
-  booktitle = {Proceedings of the 7th ACM International Conference on AI in Finance (ICAIF)},
-  year      = {2026},
-}
-```
