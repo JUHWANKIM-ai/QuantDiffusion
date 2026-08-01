@@ -1,4 +1,4 @@
-"""The five figures that go in the paper.
+"""The figures that go in the paper.
 
   fig1  stylized facts:  ACF(|r|), ACF(r^2), cross asset comovement of x_t
   fig2  daily log return distributions for JPM, the figure already in main.tex,
@@ -6,6 +6,9 @@
   fig3  portfolio risk radars, benchmark beside ablation, same axes and format
   fig4  risk error at every horizon, the Tail-GAN metric by h
   fig5  architecture, a temporary raster stand in for the draw.io figure
+  fig6  fig4 resolved per trading strategy block
+  fig7  ablation generation fidelity, a heat map of the ratio to the full model,
+        the fidelity counterpart of fig3
 
 Everything is sized for acmart sigconf: 7.0 in across both columns, 3.33 in for
 one, Times New Roman to match the body text, 400 dpi.
@@ -97,17 +100,23 @@ plt.rcParams.update(
 )
 
 
-def save(fig, name, outdir=OUT):
+def save(fig, name, outdir=OUT, transparent=True):
     """Write at DPI with a transparent background.
 
     The page is white anyway, so a transparent canvas costs nothing and lets the
     figure sit on a coloured background in a slide without a white box around it.
     White is still used where an element has to mask what is under it, such as the
     boxes behind the radar value labels.
+
+    ``transparent=False`` bakes the white in instead, for a viewer that composites
+    the alpha channel against a dark background and renders the axis labels
+    unreadable.
     """
     os.makedirs(outdir, exist_ok=True)
     p = os.path.join(outdir, name)
-    fig.savefig(p, dpi=DPI, transparent=True)
+    if not transparent:
+        fig.patch.set_facecolor("white")
+    fig.savefig(p, dpi=DPI, transparent=transparent)
     plt.close(fig)
     print("  wrote", os.path.relpath(p, ROOT))
 
@@ -985,6 +994,110 @@ def fig6():
 
 
 # ==========================================================================
+# fig 7: the generation fidelity of the ablation variants, relative to Full
+# ==========================================================================
+# Six of the nineteen fidelity metrics, one per property the design targets:
+# cross asset dependence, the one day marginal, its asymmetry, its tail, and
+# volatility clustering in two forms. ACF(|r|) is used rather than ACF(r)
+# because ACF(r) is close to zero in the data, so that axis rewards a model for
+# generating no structure at all and inverts its own meaning.
+FIDELITY6 = [
+    ("CCF(τ = 0)_MAE", "CCF\n$\\tau$=0"),
+    ("KS(1)", "KS\n(1)"),
+    ("Skew(1)", "Skew\n(1)"),
+    ("Kurt(1)", "Kurt\n(1)"),
+    ("ACF(x^2)", "ACF\n$r^{2}$"),
+    ("ACF(|x|)", "ACF\n$|r|$"),
+]
+# ordered so the two variants that only lose on risk sit above the two that lose
+# on everything, which puts the blue block and the red block side by side
+FIG7_ROWS = ["Full", "w/o Lambert W", "w/o L1 loss", "w/o cosine",
+             "w/o DMS-TCN", "w/o RV"]
+
+
+def fig7(risk_col="var", height=1.40):
+    """Ablation fidelity as a heat map of the ratio to the full model.
+
+    fig3 reports portfolio risk on a radar. This is the fidelity counterpart, and
+    it is a heat map rather than a radar because a radar has to normalize each
+    axis to a radius and every available normalization is either set dependent
+    (per axis min-max moves a polygon when a *different* variant is added or
+    removed) or references a quantity nobody asked about (the axis mean). The
+    ratio to Full is what the ablation is about, so it is encoded directly:
+    diverging around an exact neutral at Full, blue better and red worse. The
+    colour bar is inverted so that better is at the top.
+
+    ``risk_col`` rules a risk column off from the fidelity block: "var" averages
+    the three VaR levels, "all" averages all six VaR and ES entries, None drops
+    it. Dropping it costs the contrast that motivates the figure, since the
+    fidelity block reads mostly blue while the risk column is red throughout.
+    """
+    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+
+    label = {"var": "VaR RE\nmean", "all": "risk\nmean RE"}
+    fid, _ = read_pm_table(os.path.join(ST, "ablation__gen_quality.csv"))
+    risk, _ = read_pm_table(os.path.join(ST, "ablation__tailgan_vares.csv"))
+    ren = {COL_ABL[k]: k for k in COL_ABL}
+    fid, risk = fid.rename(columns=ren), risk.rename(columns=ren)
+    if risk_col == "var":
+        risk = risk.loc[[i for i in risk.index if i.startswith("RE_VaR")]]
+
+    cols = list(FIDELITY6) + ([("__risk__", label[risk_col])] if risk_col else [])
+    Z = np.empty((len(FIG7_ROWS), len(cols)))
+    for j, (k, _) in enumerate(cols):
+        base = risk.mean()["Full"] if k == "__risk__" else fid.loc[k, "Full"]
+        for i, m in enumerate(FIG7_ROWS):
+            v = risk.mean()[m] if k == "__risk__" else fid.loc[k, m]
+            Z[i, j] = np.log2(v / base)
+
+    cmap = LinearSegmentedColormap.from_list(
+        "bwr_paper", ["#234EB6", "#7FA0D6", "#EDEDEA", "#DFA08C", "#B4341A"])
+    norm = TwoSlopeNorm(vmin=-1.2, vcenter=0.0, vmax=1.2)
+
+    fig, (ax, cax) = plt.subplots(
+        1, 2, figsize=(COL, height),
+        gridspec_kw={"width_ratios": [1, 0.03], "wspace": 0.03})
+    # the two line column headers need a fixed band in inches, so the top margin
+    # is derived from the height rather than fixed as a fraction
+    fig.subplots_adjust(left=0.21, right=0.89, top=1.0 - 0.34 / height, bottom=0.04)
+    ax.imshow(Z, cmap=cmap, norm=norm, aspect="auto")
+    # the surface gap the mark spec asks for between adjacent filled cells
+    for x in np.arange(-0.5, len(cols), 1):
+        ax.axvline(x, color="white", lw=1.4)
+    for y in np.arange(-0.5, len(FIG7_ROWS), 1):
+        ax.axhline(y, color="white", lw=1.4)
+    if risk_col:
+        ax.axvline(len(cols) - 1.5, color="#444444", lw=1.1)
+
+    for i in range(len(FIG7_ROWS)):
+        for j in range(len(cols)):
+            r = 2.0 ** Z[i, j]
+            txt = "—" if FIG7_ROWS[i] == "Full" else (
+                f"{r:.2f}" if r < 10 else f"{r:.1f}")
+            ax.text(j, i, txt, ha="center", va="center", fontsize=5.0,
+                    color="#1A1A19" if abs(Z[i, j]) < 0.75 else "white")
+    ax.set_xticks(range(len(cols)))
+    ax.set_xticklabels([h for _, h in cols], fontsize=5.4)
+    ax.xaxis.set_ticks_position("top")
+    ax.set_yticks(range(len(FIG7_ROWS)))
+    ax.set_yticklabels(FIG7_ROWS, fontsize=5.8)
+    ax.tick_params(length=0)
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+    # the bar carries the reading, so there is no "lower is better" caption to
+    # parse: blue on top is better than Full, red at the bottom is worse. That
+    # means inverting the bar, since the value it encodes runs the other way.
+    cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax)
+    cb.set_ticks([-1.0, 0.0, 1.0])
+    cb.set_ticklabels(["better", "= Full", "worse"])
+    cb.ax.invert_yaxis()
+    cb.ax.tick_params(labelsize=5.0, length=0)
+    cb.outline.set_visible(False)
+    save(fig, "fig7c_heatmap.png")
+
+
+# ==========================================================================
 # appendix: value at the terminal horizon (h = HS[-1]), one image per measure
 # ==========================================================================
 def figA_final_horizon():
@@ -1016,7 +1129,7 @@ def figA_final_horizon():
 
 
 # ==========================================================================
-FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6,
+FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6, 7: fig7,
         "A": figA_final_horizon}
 
 if __name__ == "__main__":
