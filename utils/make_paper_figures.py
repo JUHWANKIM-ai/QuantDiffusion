@@ -56,6 +56,7 @@ if PROJECT not in sys.path:
 from utils.make_figures import (
     ABL,
     ASSETS,
+    SEQ_LEN,
     C,
     DPI,
     EPS,
@@ -1128,8 +1129,57 @@ def figA_final_horizon():
         save(fig, f"figA_final_horizon_{tag_}.png")
 
 
+def fig8(asset=3, h=100, name="fig8_regime_tails.png", outdir=OUT):
+    """Regime shift between the partitions, drawn like fig2: overlapping filled histograms
+    of the h-day cumulative log return of one asset (HSI over 100 days by default, the
+    asset where the shift between the partitions is clearest).
+
+    (a) training windows against test windows, (b) QuantDiffusion against test windows.
+    The camera-ready answer to Reviewer 2: panel (a) is the shift between the two
+    partitions that every out-of-sample risk error contains; panel (b) places our model
+    against the same test distribution. Only our model is drawn.
+    """
+    import pandas as pd
+
+    df = pd.read_csv(os.path.join(PROJECT, "data", "indices.csv"), index_col=0)
+    r = np.log1p(df.apply(pd.to_numeric).astype(float).pct_change()).dropna().values
+    n = int(0.7 * len(r))
+
+    def windows(a):  # (T, d) -> (N, d, L)
+        return np.lib.stride_tricks.sliding_window_view(a, SEQ_LEN, axis=0)
+
+    train_w, test_w = windows(r[:n]), windows(r[n:])
+    ours = np.concatenate([np.load(os.path.join(ST, "synthetic_data", "baseline", f"{s}.npy"))
+                           for s in range(5)])
+    test = cum_h(test_w, asset, h, n_win=len(test_w))
+    other = {"Training": cum_h(train_w, asset, h, n_win=len(train_w)),
+             "QuantDiffusion": cum_h(ours, asset, h, n_win=len(ours))}
+    bins = np.linspace(*np.percentile(np.r_[test, other["Training"]], [0.05, 99.95]), 61)
+
+    fig, axes = plt.subplots(1, 2, figsize=(COL, 1.55), sharex=True)
+    fig.subplots_adjust(left=0.115, right=0.985, top=0.86, bottom=0.25, wspace=0.30)
+    for ax, (label, x) in zip(axes, other.items()):
+        ax.hist(test, bins=bins, density=True, color=HIST_FC, alpha=0.62, edgecolor=HIST_EC,
+                lw=0.2, label="Test", zorder=2)
+        ax.hist(x, bins=bins, density=True, color=SYN_FC, alpha=0.62, edgecolor=SYN_EC,
+                lw=0.2, label=label, zorder=3)
+        ax.set_title(f"{label} vs. Test", pad=2.5, fontsize=7.0, fontweight="bold")
+        ax.xaxis.set_major_locator(MaxNLocator(4))
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+        ax.tick_params(labelsize=5.8)
+        ax.grid(axis="y")
+        ax.set_axisbelow(True)
+        ax.set_xlabel(f"Cumulative log return ({h} Day)", fontsize=6.6, labelpad=1.5)
+        ax.legend(loc="upper left", fontsize=4.8, handlelength=0.8, labelspacing=0.18,
+                  borderpad=0.18, handletextpad=0.4)
+    axes[0].set_ylabel("Density", fontsize=6.6, labelpad=1.5)
+    for k, v in {"Test": test, **other}.items():
+        print(f"  {k:15s} 5% quantile {np.quantile(v, 0.05):+.4f}  std {v.std():.4f}")
+    save(fig, name, outdir=outdir)
+
+
 # ==========================================================================
-FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6, 7: fig7,
+FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6, 7: fig7, 8: fig8,
         "A": figA_final_horizon}
 
 if __name__ == "__main__":
