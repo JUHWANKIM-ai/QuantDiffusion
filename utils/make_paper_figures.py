@@ -3,12 +3,14 @@
   fig1  stylized facts:  ACF(|r|), ACF(r^2), cross asset comovement of x_t
   fig2  daily log return distributions for JPM, the figure already in main.tex,
         restyled
-  fig3  portfolio risk radars, benchmark beside ablation, same axes and format
   fig4  risk error at every horizon, the Tail-GAN metric by h
-  fig5  architecture, a temporary raster stand in for the draw.io figure
   fig6  fig4 resolved per trading strategy block
-  fig7  ablation generation fidelity, a heat map of the ratio to the full model,
-        the fidelity counterpart of fig3
+  fig7  ablation generation fidelity, a heat map of the ratio to the full model
+  fig8  regime shift: HSI 100 day cumulative returns, training and QuantDiffusion
+        against the test windows
+
+The framework figure (fig_framework.png) is exported from the slide deck and is
+not drawn here.
 
 Everything is sized for acmart sigconf: 7.0 in across both columns, 3.33 in for
 one, Times New Roman to match the body text, 400 dpi.
@@ -16,7 +18,7 @@ one, Times New Roman to match the body text, 400 dpi.
 The figures are written straight into result/images.
 
 Run from the repository root:
-      python utils/make_paper_figures.py          all five
+      python utils/make_paper_figures.py          all six
       python utils/make_paper_figures.py 1 4      only 1 and 4
 or from a notebook: import utils.make_paper_figures as pf; pf.fig1()
 
@@ -35,7 +37,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 from matplotlib.ticker import MaxNLocator
 
 # This module lives in utils/ while the plotting helpers it draws on live beside
@@ -54,7 +55,6 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 from utils.make_figures import (
-    ABL,
     ASSETS,
     SEQ_LEN,
     C,
@@ -71,7 +71,7 @@ from utils.make_figures import (
     read_pm_table,
     tag,
 )
-from utils.make_square_figures import COL_ABL, COL_BENCH, RISK, radar  # noqa: E402
+from utils.make_square_figures import COL_ABL  # noqa: E402
 
 # the figures land directly under result/images
 OUT = os.path.join(PROJECT, "result", "images")
@@ -106,8 +106,6 @@ def save(fig, name, outdir=OUT, transparent=True):
 
     The page is white anyway, so a transparent canvas costs nothing and lets the
     figure sit on a coloured background in a slide without a white box around it.
-    White is still used where an element has to mask what is under it, such as the
-    boxes behind the radar value labels.
 
     ``transparent=False`` bakes the white in instead, for a viewer that composites
     the alpha channel against a dark background and renders the axis labels
@@ -531,70 +529,6 @@ def fig2(asset=2, h=1):
 
 
 # ==========================================================================
-# fig 3: the two risk radars, benchmark beside ablation
-# ==========================================================================
-def fig3():
-    bm, _ = read_pm_table(os.path.join(ST, "benchmark__tailgan_vares.csv"))
-    ab, _ = read_pm_table(os.path.join(ST, "ablation__tailgan_vares.csv"))
-
-    # Side by side inside one column, on fig4's canvas. Each radar then gets about
-    # 1.6 in, which is too small for the thirty six printed vertex values, so the
-    # numbers are dropped and the tables carry them. What the panel still shows is
-    # the shape: which model reaches the outer ring on which axis.
-    fig, axes = plt.subplots(1, 2, figsize=(COL, 1.62),
-                             subplot_kw={"projection": "polar"})
-    fig.subplots_adjust(left=0.02, right=0.98, top=0.72, bottom=0.02, wspace=0.34)
-    for ax, (mean, cols, keys, title, letter) in zip(
-        axes,
-        [
-            (bm, COL_BENCH, ORDER, "benchmark", "a"),
-            (
-                ab,
-                COL_ABL,
-                # worst first so the reversed legend reads Full downward
-                [
-                    "w/o RV",
-                    "w/o DMS-TCN",
-                    "w/o cosine",
-                    "w/o Lambert W",
-                    "w/o L1 loss",
-                    "Full",
-                ],
-                "ablation",
-                "b",
-            ),
-        ],
-    ):
-        present = {k: cols[k] for k in keys if k in cols and cols[k] in mean.columns}
-        vals = {m: {k: mean.loc[k, c] for k, _ in RISK} for m, c in present.items()}
-        radar(ax, RISK, vals, list(present), note=False, gamma=0.42,
-              show_values=False)
-        ax.set_ylim(0, 1.06)
-        ax.set_yticklabels([])
-        for t in ax.get_xticklabels():
-            t.set_fontsize(4.2)
-        ax.tick_params(pad=0.4)
-        relabel(
-            ax,
-            reverse=True,
-            loc="lower center",
-            bbox_to_anchor=(0.5, 1.10),
-            ncol=2,
-            fontsize=4.0,
-            columnspacing=0.5,
-            handlelength=0.7,
-            labelspacing=0.15,
-            handletextpad=0.3,
-            frameon=False,
-        )
-        ax.text(-0.16, 1.04, f"({letter})", transform=ax.transAxes, fontsize=6.4,
-                fontweight="bold", va="bottom", ha="left")
-        ax.text(1.0, 1.04, title, transform=ax.transAxes, fontsize=5.6,
-                va="bottom", ha="right")
-    save(fig, "fig3_risk_radars.png")
-
-
-# ==========================================================================
 # fig 4: risk error at every horizon
 # ==========================================================================
 # fig4 must equal Table portfolio_risk at its terminal horizon, so it is computed
@@ -780,138 +714,6 @@ def fig4():
 
 
 # ==========================================================================
-# fig 5: architecture, a temporary raster stand in for the draw.io figure
-# ==========================================================================
-def fig5():
-    """Take the draw.io export as it is.
-
-    The architecture figure is authored in draw.io, so the file that goes in the
-    paper is the export from draw.io itself, not a redrawing. This only copies it
-    into place under the figN naming, and refuses to invent a substitute if the
-    export is missing.
-    """
-    import shutil
-
-    src = os.path.join(ROOT, "result", "images", "drawio", "cand_A_dmstcn_backbone.png")
-    if not os.path.exists(src):
-        raise FileNotFoundError(
-            f"no draw.io export at {src}. Open cand_A_dmstcn_backbone.drawio "
-            "and export as PNG at the highest dpi, then rerun."
-        )
-    dst = os.path.join(OUT, "fig5_architecture.png")
-    shutil.copyfile(src, dst)
-    print(f"  copied the draw.io export -> {os.path.relpath(dst, ROOT)}")
-
-
-def _fig5_unused():
-    fig = plt.figure(figsize=(FULL, 1.42))
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_xlim(0, 100)
-    ax.set_ylim(0, 21.5)
-    ax.axis("off")
-
-    stages = [
-        ("Log returns", r"$r \in \mathbb{R}^{6\times256}$", "#F2F2EE"),
-        ("RV decomposition", r"$r_t = z_t\sqrt{RV_t}$", "#E7EDF3"),
-        ("Gaussianization", r"Lambert $W^{-1}$", "#F2EEE6"),
-        ("Diffusion", r"DMS-TCN $\epsilon_\theta(x_t,t)$", "#E7EDF3"),
-        ("Reconstruction", r"Lambert $W$, denorm", "#F2EEE6"),
-        ("Scenarios", r"$\hat{r} \in \mathbb{R}^{6\times256}$", "#F2F2EE"),
-    ]
-    w, gap, y, hgt = 14.0, 3.2, 9.4, 8.4
-    centres = []
-    for i, (name, sub, fill) in enumerate(stages):
-        x = i * (w + gap)
-        ax.add_patch(
-            FancyBboxPatch(
-                (x, y),
-                w,
-                hgt,
-                boxstyle="round,pad=0,rounding_size=1.1",
-                fc=fill,
-                ec="#6E6E68",
-                lw=0.9,
-                zorder=2,
-            )
-        )
-        ax.text(
-            x + w / 2,
-            y + hgt * 0.63,
-            name,
-            ha="center",
-            va="center",
-            fontsize=7.8,
-            zorder=3,
-        )
-        ax.text(
-            x + w / 2,
-            y + hgt * 0.27,
-            sub,
-            ha="center",
-            va="center",
-            fontsize=6.9,
-            color="#333333",
-            zorder=3,
-        )
-        centres.append(x + w / 2)
-        if i:
-            ax.add_patch(
-                FancyArrowPatch(
-                    (x - gap, y + hgt / 2),
-                    (x - 0.6, y + hgt / 2),
-                    arrowstyle="-|>",
-                    mutation_scale=7,
-                    lw=0.9,
-                    color="#4A4A4A",
-                    zorder=3,
-                    shrinkA=0,
-                    shrinkB=0,
-                )
-            )
-
-    for i, txt in enumerate(
-        [
-            r"$6\times256$",
-            r"$12\times256$",
-            r"$12\times256$",
-            r"$12\times256$",
-            r"$6\times256$",
-        ]
-    ):
-        ax.text(
-            (centres[i] + centres[i + 1]) / 2,
-            y + hgt + 1.4,
-            txt,
-            ha="center",
-            va="bottom",
-            fontsize=6.0,
-            color="#777777",
-        )
-
-    ax.text(
-        50,
-        6.4,
-        "three dilated blocks,  "
-        r"$k = 15,\,7,\,5$,   $d = 1,\,4,\,16$,   128 channels,  "
-        "receptive field 103",
-        ha="center",
-        va="top",
-        fontsize=6.9,
-        color="#333333",
-    )
-    ax.text(
-        50,
-        3.0,
-        r"cosine schedule,  $\tau = 1.5$,  $T = 75$,  " r"Student-$t$ prior,  df $= 5$",
-        ha="center",
-        va="top",
-        fontsize=6.9,
-        color="#333333",
-    )
-    save(fig, "fig5_architecture.png")
-
-
-# ==========================================================================
 # fig 6: fig4 resolved per trading strategy
 # ==========================================================================
 def fig6():
@@ -1019,8 +821,7 @@ FIG7_ROWS = ["Full", "w/o Lambert W", "w/o L1 loss", "w/o cosine",
 def fig7(risk_col="var", height=1.40):
     """Ablation fidelity as a heat map of the ratio to the full model.
 
-    fig3 reports portfolio risk on a radar. This is the fidelity counterpart, and
-    it is a heat map rather than a radar because a radar has to normalize each
+    It is a heat map rather than a radar because a radar has to normalize each
     axis to a radius and every available normalization is either set dependent
     (per axis min-max moves a polygon when a *different* variant is added or
     removed) or references a quantity nobody asked about (the axis mean). The
@@ -1099,36 +900,8 @@ def fig7(risk_col="var", height=1.40):
 
 
 # ==========================================================================
-# appendix: value at the terminal horizon (h = HS[-1]), one image per measure
+# fig 8: regime shift between the training and test partitions
 # ==========================================================================
-def figA_final_horizon():
-    h = HS[-1]
-    p = pnl_cached(h)["all"]                       # {model: (RE_VaR, RE_ES)}
-    order = [m for m in order_models() if m in p]
-    labels = [DISPLAY.get(m, m) for m in order]
-    for row, name, tag_ in [(0, r"RE$_{\mathrm{VaR}}$", "var"),
-                            (1, r"RE$_{\mathrm{ES}}$", "es")]:
-        vals = [p[m][row] for m in order]
-        fig, ax = plt.subplots(figsize=(COL, 1.75))
-        fig.subplots_adjust(left=0.14, right=0.98, top=0.85, bottom=0.20)
-        x = list(range(len(order)))
-        ax.bar(x, vals, width=0.62, color=[C[m] for m in order], zorder=3)
-        for i, v in enumerate(vals):
-            ax.text(i, v, f"{v:.3f}", ha="center", va="bottom",
-                    fontsize=5.6, zorder=4)
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, fontsize=6.2)
-        ax.set_ylabel(f"{name} ($\\alpha={ALPHA}$)", fontsize=6.6, labelpad=1.5)
-        ax.set_title(f"Terminal horizon $h={h}$", fontsize=7.4,
-                     fontweight="bold", pad=3)
-        ax.yaxis.set_major_locator(MaxNLocator(4))
-        ax.tick_params(labelsize=5.8)
-        ax.grid(axis="y")
-        ax.set_axisbelow(True)
-        ax.set_ylim(0, max(vals) * 1.18)
-        save(fig, f"figA_final_horizon_{tag_}.png")
-
-
 def fig8(asset=3, h=100, name="fig8_regime_tails.png", outdir=OUT):
     """Regime shift between the partitions, drawn like fig2: overlapping filled histograms
     of the h-day cumulative log return of one asset (HSI over 100 days by default, the
@@ -1179,8 +952,7 @@ def fig8(asset=3, h=100, name="fig8_regime_tails.png", outdir=OUT):
 
 
 # ==========================================================================
-FIGS = {1: fig1, 2: fig2, 3: fig3, 4: fig4, 5: fig5, 6: fig6, 7: fig7, 8: fig8,
-        "A": figA_final_horizon}
+FIGS = {1: fig1, 2: fig2, 4: fig4, 6: fig6, 7: fig7, 8: fig8}
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--pnl-worker":
