@@ -5,7 +5,7 @@ Financial Scenarios for Portfolio Risk Assessment**.
 
 ---
 
-## Our Paper
+## Our Paper 
 
 *QuantDiffusion: Deep Generation of Multivariate Financial Scenarios for Portfolio Risk Assessment.*
 In the 7th ACM International Conference on AI in Finance (ICAIF), 2026. Author list withheld for review.
